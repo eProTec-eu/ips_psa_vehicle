@@ -534,4 +534,27 @@ class PSAVehicle extends IPSModule
 
         return $response;
     }
+
+    private function extractPemFromApk(string $apkPath, string $pfxRelative = 'assets/MWPMYMA1.pfx', string $pfxPassword = ''): array
+    {
+        $zip = new ZipArchive();
+        if ($zip->open($apkPath) !== true) {
+            throw new RuntimeException("APK konnte nicht geöffnet werden: $apkPath");
+        }
+        $pfxData = $zip->getFromName($pfxRelative);
+        $zip->close();
+        if ($pfxData === false) {
+            throw new RuntimeException("PFX nicht gefunden in APK: $pfxRelative");
+        }
+
+        // PKCS#12 nach PEM zerlegen
+        $certs = [];
+        if (!openssl_pkcs12_read($pfxData, $certs, $pfxPassword)) {
+            throw new RuntimeException("PFX konnte nicht gelesen werden (Passwort?).");
+        }
+        // $certs['cert'], $certs['pkey'], $certs['extracerts'] verfügbar
+        $certPem = $certs['cert'];
+        $keyPem  = $certs['pkey'];
+        return [$certPem, $keyPem];
+    }
 }
