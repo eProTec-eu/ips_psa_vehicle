@@ -1,0 +1,11 @@
+{
+  "id": "{6F67F96F-40A7-4E1C-AE41-9F4A50123ABC}",
+  "name": "PSAVehicle",
+  "type": 3,
+  "vendor": "Stellantis",
+  "aliases": ["PSA Vehicle API"],
+  "url": "https://developer.groupe-psa.io/",
+  "version": "1.1",
+  "build": 2,
+  "compatibility": {"version": "6.0"}
+}
