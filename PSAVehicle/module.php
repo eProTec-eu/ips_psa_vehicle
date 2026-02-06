@@ -39,11 +39,10 @@ class PSAVehicle extends IPSModule
     public function GetConfigurationForm()
     {
         // Aktuellen Zustand lesen, um initiale Sichtbarkeit korrekt zu setzen
-        $certType   = strtoupper($this->ReadPropertyString("CertType"));
-        $showKey    = ($certType === 'PEM_GETRENNT');          // KeyPath nur bei getrennten PEMs
-        $showKeyPwd = ($certType !== 'P12');                   // KeyPass bei PEM sinnvoll
-        $showCertPwd= ($certType === 'P12' || $certType === 'PEM_COMBINED'); // häufig bei P12/combined
-        // Du kannst das nach Bedarf anpassen.
+        $certType    = strtoupper($this->ReadPropertyString("CertType"));
+        $showKey     = ($certType === 'PEM_GETRENNT');                          // KeyPath nur bei getrennten PEMs
+        $showKeyPwd  = ($certType !== 'P12');                                   // KeyPass bei PEM sinnvoll
+        $showCertPwd = ($certType === 'P12' || $certType === 'PEM_COMBINED');   // häufig bei P12/combined
 
         $form = [
             "elements" => [
@@ -96,8 +95,8 @@ class PSAVehicle extends IPSModule
                                 ["caption" => "PEM (combined: Zertifikat+Key in einer Datei)", "value" => "PEM_COMBINED"],
                                 ["caption" => "PKCS#12 (.p12 / .pfx)", "value" => "P12"]
                             ],
-                            // WICHTIG: onChange ruft eine Modul-Methode auf, die die Felder live umschaltet
-                            "onChange" => "PSAVehicle_CertTypeChanged($id, $CertType);"
+                            // WICHTIG: Literal-String mit Platzhaltern ($id, $CertType) -> einfache Anführungszeichen!
+                            "onChange" => 'PSAVehicle_CertTypeChanged($id, $CertType);'
                         ],
                         [
                             "type"  => "RowLayout",
@@ -105,7 +104,7 @@ class PSAVehicle extends IPSModule
                                 [
                                     "type"    => "ValidationTextBox",
                                     "name"    => "CertPath",
-                                    "caption" => "Pfad Zertifikat (.pem | .p12/.pfx)"
+                                    "caption" => ($certType === 'P12') ? "Pfad Zertifikat (.p12/.pfx)" : "Pfad Zertifikat (.pem)"
                                 ],
                                 [
                                     "type"    => "ValidationTextBox",
@@ -165,17 +164,17 @@ class PSAVehicle extends IPSModule
                 ]
             ],
 
-            // Aktionen
+            // Aktionen (Buttons) – ebenfalls literal (einfaches Quote), damit $id erhalten bleibt
             "actions" => [
                 [
                     "type"    => "Button",
                     "label"   => "Fahrzeugdaten aktualisieren (API-Call)",
-                    "onClick" => "PSAVehicle_UpdateVehicleData($id);"
+                    "onClick" => 'PSAVehicle_UpdateVehicleData($id);'
                 ],
                 [
                     "type"    => "Button",
                     "label"   => "TLS-Handschlag testen (optional)",
-                    "onClick" => "PSAVehicle_TestTlsHandshake($id);"
+                    "onClick" => 'PSAVehicle_TestTlsHandshake($id);'
                 ],
                 [
                     "type"    => "Label",
