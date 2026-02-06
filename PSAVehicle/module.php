@@ -40,9 +40,9 @@ class PSAVehicle extends IPSModule
                 ["type" => "ValidationTextBox", "name" => "ClientSecret", "caption" => "Client Secret"],
                 ["type" => "ValidationTextBox", "name" => "Realm", "caption" => "Realm"],
                 ["type" => "ValidationTextBox", "name" => "VIN", "caption" => "VIN"],
-                ["type" => "ValidationTextBox", "name": "CertPath", "caption" => "Pfad Zertifikat (.pem)"],
-                ["type" => "ValidationTextBox", "name": "KeyPath", "caption" => "Pfad PrivateKey (.pem)"],
-                ["type" => "ValidationTextBox", "name": "CAPath", "caption" => "Pfad CA-Zertifikat (.pem)"]
+                ["type" => "ValidationTextBox", "name" => "CertPath", "caption" => "Pfad Zertifikat (.pem)"],
+                ["type" => "ValidationTextBox", "name" => "KeyPath", "caption" => "Pfad PrivateKey (.pem)"],
+                ["type" => "ValidationTextBox", "name" => "CAPath", "caption" => "Pfad CA-Zertifikat (.pem)"]
             ],
             "actions" => [
                 [
