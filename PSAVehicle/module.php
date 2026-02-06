@@ -535,6 +535,7 @@ class PSAVehicle extends IPSModule
         return $response;
     }
 
+    //nur Behelfsweise, wird nur benötigt um die PSA APK von flobz zu zerlegen!!!
     private function extractPemFromApk(string $apkPath, string $pfxRelative = 'assets/MWPMYMA1.pfx', string $pfxPassword = ''): array
     {
         $zip = new ZipArchive();
