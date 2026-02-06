@@ -8,5 +8,13 @@
   "date": 1738800000,
   "compatibility": {
     "version": "7.0"
-  }
+  },
+  "modules": [
+    {
+      "id": "{6F67F96F-40A7-4E1C-AE41-9F4A50123ABC}",
+      "name": "PSAVehicle",
+      "type": 3,
+      "url": "PSAVehicle"
+    }
+  ]
 }
