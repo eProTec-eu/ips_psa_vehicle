@@ -90,28 +90,44 @@ class PSAVehicle extends IPSModule
     }
 
 
-    private function UpdateMap($lat, $lon)
-    {
-        $html = <<https://unpkg.com/leaflet/dist/leaflet.css
-https://unpkg.com/leaflet/dist/leaflet.js
+private function UpdateMap(float $lat, float $lon): void
+{
+    // HTML-Inhalt als HEREDOC bauen. Variablen {$lat} und {$lon} werden interpoliert.
+    $html = <<<HTML
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
-<div id="map" style="width:100%; height:400px;"></div>
+    <div id="map" style="width:100%; height:400px;"></div>
 
-<script>
-var map = L.map('map').setView([$lat, $lon], 15);
+    <script>
+    // Warten, bis Leaflet geladen ist
+    (function() {
+        var map = L.map('map').setView([{$lat}, {$lon}], 15);
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-}).addTo(map);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap-Mitwirkende'
+        }).addTo(map);
 
-L.marker([$lat, $lon]).addTo(map)
-    .bindPopup("Fahrzeugstandort")
-    .openPopup();
-</script>
-HTML;
+        L.marker([{$lat}, {$lon}]).addTo(map)
+            .bindPopup('Fahrzeugstandort')
+            .openPopup();
+    })();
+    </script>
+    HTML;
 
-        SetValue($this->GetIDForIdent("MapHTML"), $html);
+    // In Variable mit Ident "MapHTML" schreiben (Profil ~HTMLBox erforderlich)
+    $varID = $this->GetIDForIdent('MapHTML');
+    if ($varID === 0) {
+        // Falls noch nicht vorhanden: anlegen
+        $varID = $this->RegisterVariableString('MapHTML', 'Karte', '~HTMLBox');
+    } else {
+        // Sicherstellen, dass Profil korrekt gesetzt ist
+        IPS_SetVariableCustomProfile($varID, '~HTMLBox');
     }
+
+    SetValueString($varID, $html);
+}
 
 
     public function GetVehicleData()
