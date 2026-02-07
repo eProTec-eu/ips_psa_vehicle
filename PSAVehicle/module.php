@@ -41,6 +41,15 @@ class PSAVehicle extends IPSModule
         $this->RegisterVariableFloat("Longitude", "Longitude", "", 5);
         $this->RegisterVariableString("MapHTML", "Standortkarte", "~HTMLBox", 6);
         $this->RegisterVariableString("PSACode", "PSA Code / Status", "", 10);
+
+        // flobz
+        $this->RegisterPropertyString("FlobzApkUrl", "");     // z. B. https://.../app-release.apk
+        $this->RegisterPropertyString("FlobzApkPfxPath", "assets/MWPMYMA1.pfx"); // Default aus deinem Helper
+        $this->RegisterPropertyString("FlobzApkPfxPass", ""); // falls gesetzt
+        $this->RegisterPropertyString("CertCacheDir", "/var/lib/symcon/psa_certs"); // anpassen, absolute Pfade!
+
+        // Optional: Variable, um PSA Code/Status anzuzeigen
+        $this->RegisterVariableString("PSACode", "PSA Code / Status", "", 10);
     }
 
     public function ApplyChanges()
@@ -179,6 +188,40 @@ class PSAVehicle extends IPSModule
                     ]
                 ],
 
+                // APK-Quelle
+                [
+                    "type" => "ExpansionPanel",
+                    "caption" => "APK-Quelle (Optional)",
+                    "items" => [
+                        ["type" => "Label", "caption" => "Pfade/Passwörter hinterlegen."],
+                        [
+                            "type" => "RowLayout",
+                            "items" => [
+                                [
+                                    "type" => "Button",
+                                    "label" => "Zertifikate via flobz-APK automatisch holen",
+                                    "onClick" => 'PSAVehicle_FetchFlobzApkAndCerts($id);'
+                                ],
+                                [
+                                    "type" => "ValidationTextBox",
+                                    "name" => "FlobzApkPfxPath",
+                                    "caption" => "PFX-Pfad in APK (z. B. assets/MWPMYMA1.pfx)"
+                                ],
+                                [
+                                    "type" => "ValidationTextBox",
+                                    "name" => "FlobzApkPfxPass",
+                                    "caption" => "PFX-Passwort (falls benötigt)"
+                                ],
+                                [
+                                    "type" => "ValidationTextBox",
+                                    "name" => "CertCacheDir",
+                                    "caption" => "Cache-Verzeichnis für PEM/P12"
+                                ]
+                            ]
+                        ]
+                    ]
+                ],                
+
                 // Hinweise
                 [
                     "type" => "ExpansionPanel",
@@ -192,7 +235,17 @@ class PSAVehicle extends IPSModule
             ],
 
             // Aktionen
-            "actions" => [
+            "actions" => [              
+                [
+                "type"   => "Button",
+                "label"  => "Zertifikate von flobz holen",
+                "onClick"=> 'PSAVehicle_FetchFlobzCerts($id);'
+                ],
+                [
+                "type"   => "Button",
+                "label"  => "PSA Code abfragen",
+                "onClick"=> 'PSAVehicle_RequestPsaCode($id);'
+                ],
                 [
                     "type" => "Button",
                     "label" => "Fahrzeugdaten aktualisieren (API-Call)",
@@ -289,6 +342,244 @@ class PSAVehicle extends IPSModule
         $this->applyCertTypeVisibility($certType);
     }
 
+    /** Hauptaktion: lädt die passende flobz-APK aus GitHub Releases, extrahiert PFX → PEM, setzt Modul-Properties. */
+    public function FetchFlobzApkAndCerts(): bool
+    {
+        // 1) Marke aus VIN ableiten (du hast brandFromVin() bereits in deinem Modul)
+        $vin = strtoupper(trim($this->ReadPropertyString("VIN")));
+        if ($vin === "" || strlen($vin) < 3) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: VIN fehlt/zu kurz.");
+            return false;
+        }
+        $brand = $this->brandFromVin($vin); // "Peugeot", "Citroen", "DS", "Opel", "Vauxhall"
+        if ($brand === null) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Marke aus VIN nicht erkennbar.");
+            return false;
+        }
+
+        // 2) Brand → APK-Dateiname
+        $apkNameMap = [
+            'Peugeot'  => 'peugeot.apk',
+            'Citroen'  => 'citroen.apk',
+            'DS'       => 'ds.apk',
+            'Opel'     => 'opel.apk',
+            'Vauxhall' => 'vauxhall.apk',
+        ];
+        if (!isset($apkNameMap[$brand])) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine APK-Zuordnung für Marke {$brand}.");
+            return false;
+        }
+        $apkFileName = $apkNameMap[$brand];
+
+        // 3) Cache-Verzeichnis
+        $cacheDir = rtrim($this->ReadPropertyString("CertCacheDir"), "/");
+        if ($cacheDir === "" || !$this->isAbsolutePath($cacheDir)) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: CertCacheDir fehlt/ist nicht absolut.");
+            return false;
+        }
+        if (!is_dir($cacheDir) && !@mkdir($cacheDir, 0700, true)) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Cache-Verzeichnis kann nicht erstellt werden: {$cacheDir}");
+            return false;
+        }
+
+        // 4) GitHub Releases: neueste Version abfragen & Asset-URL (browser_download_url) für <brand>.apk finden
+        $release = $this->githubGetLatestRelease("flobz", "psa_car_controller");
+        if ($release === null || empty($release['assets'])) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine Release-Assets gefunden.");
+            return false;
+        }
+
+        $downloadUrl = null;
+        foreach ($release['assets'] as $asset) {
+            // GitHub liefert: name, browser_download_url, ...
+            if (isset($asset['name']) && strtolower($asset['name']) === strtolower($apkFileName)) {
+                $downloadUrl = $asset['browser_download_url'] ?? null;
+                break;
+            }
+        }
+        if ($downloadUrl === null) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Asset {$apkFileName} nicht im neuesten Release gefunden.");
+            return false;
+        }
+
+        // 5) APK herunterladen
+        $apkPath = $cacheDir . "/" . $apkFileName;
+        if (!$this->downloadFile($downloadUrl, $apkPath, 60)) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: APK-Download fehlgeschlagen: {$downloadUrl}");
+            return false;
+        }
+
+        // 6) PFX aus APK extrahieren → PEMs gewinnen (nutzt deine bestehende Routine)
+        try {
+            // Standardpfad & leeres Passwort – so ist es in flobz beschrieben: assets/MWPMYMA1.pfx (aus der APK) [1](https://community.openhab.org/t/groupe-psa-cars-binding-peugeot-citroen-ds-opel-vauxhall/110580?page=5)
+            [$certPem, $keyPem] = $this->extractPemFromApk($apkPath, 'assets/MWPMYMA1.pfx', '');
+        } catch (\Throwable $e) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: PFX-Extraktion aus APK fehlgeschlagen: " . $e->getMessage());
+            return false;
+        }
+
+        // 7) PEM-Dateien sicher schreiben
+        $certPemPath = $cacheDir . "/client_cert.pem";
+        $keyPemPath  = $cacheDir . "/client_key.pem";
+        if (@file_put_contents($certPemPath, $certPem) === false || @chmod($certPemPath, 0600) === false) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: client_cert.pem konnte nicht gespeichert/gesetzt werden.");
+            return false;
+        }
+        if (@file_put_contents($keyPemPath, $keyPem) === false || @chmod($keyPemPath, 0600) === false) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: client_key.pem konnte nicht gespeichert/gesetzt werden.");
+            return false;
+        }
+
+        // 8) Modul-Properties setzen (mTLS → PEM getrennt)
+        IPS_SetProperty($this->InstanceID, "CertType", "PEM_GETRENNT");
+        IPS_SetProperty($this->InstanceID, "CertPath", $certPemPath);
+        IPS_SetProperty($this->InstanceID, "KeyPath",  $keyPemPath);
+        // (Optional) falls du eigenes CA-Bundle hast:
+        // IPS_SetProperty($this->InstanceID, "CAPath", "/etc/ssl/certs/ca-bundle.crt");
+
+        // (Optional) gleich Marken-Auth/Token/Device-URL & Realm setzen
+        $this->AutoSetAuthFromVin();
+
+        if (!IPS_ApplyChanges($this->InstanceID)) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: IPS_ApplyChanges fehlgeschlagen.");
+            return false;
+        }
+
+        IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: OK – Zertifikate aktualisiert aus {$apkFileName}");
+        return true;
+    }
+
+    /** GitHub: neuestes Release (JSON) holen – optional mit Token zur Erhöhung des Rate-Limits. */
+    private function githubGetLatestRelease(string $owner, string $repo): ?array
+    {
+        $url = "https://api.github.com/repos/{$owner}/{$repo}/releases/latest";
+        $ch  = curl_init($url);
+        $headers = [
+            'User-Agent: PSAVehicle/1.0 (+https://github.com/flobz/psa_car_controller)',
+            'Accept: application/vnd.github+json'
+        ];
+        $token = trim($this->ReadPropertyString("GithubToken"));
+        if ($token !== "") {
+            $headers[] = "Authorization: Bearer {$token}";
+        }
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 20,
+            CURLOPT_HTTPHEADER     => $headers,
+        ]);
+        $resp = curl_exec($ch);
+        if ($resp === false) {
+            IPS_LogMessage("PSAVehicle", "githubGetLatestRelease: cURL Fehler: " . curl_error($ch));
+            curl_close($ch);
+            return null;
+        }
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($http !== 200) {
+            IPS_LogMessage("PSAVehicle", "githubGetLatestRelease: HTTP {$http} → {$resp}");
+            return null;
+        }
+        $json = json_decode($resp, true);
+        return is_array($json) ? $json : null;
+    }
+
+    /** robuster Downloader (auch für GitHub-Assets nutzbar) */
+    private function downloadFile(string $url, string $dest, int $timeoutSec = 30): bool
+    {
+        $fp = @fopen($dest, 'wb');
+        if (!$fp) {
+            IPS_LogMessage("PSAVehicle", "downloadFile: Ziel nicht schreibbar: {$dest}");
+            return false;
+        }
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_FILE           => $fp,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 5,
+            CURLOPT_CONNECTTIMEOUT => $timeoutSec,
+            CURLOPT_TIMEOUT        => $timeoutSec,
+            CURLOPT_USERAGENT      => 'PSAVehicle/1.0',
+            CURLOPT_HTTPHEADER     => ['Accept: application/octet-stream'],
+        ]);
+        $ok = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        curl_close($ch);
+        fclose($fp);
+
+        if ($ok === false || $code < 200 || $code >= 300) {
+            @unlink($dest);
+            IPS_LogMessage("PSAVehicle", "downloadFile: HTTP {$code}, Fehler: {$err}");
+            return false;
+        }
+        return true;
+    }
+
+    public function RequestPsaCode(): bool
+    {
+        // Beispiel: Client Credentials Flow (nur wenn PSA dies unterstützt & freigeschaltet ist)
+        $clientId     = $this->ReadPropertyString("ClientID");
+        $clientSecret = $this->ReadPropertyString("ClientSecret");
+        $realm        = $this->ReadPropertyString("Realm");
+
+        $tokenUrl = "https://api.groupe-psa.com/connectedcar/oauth/token"; // <-- ggf. richtigen Endpoint eintragen
+        $post = http_build_query([
+            'grant_type' => 'client_credentials',
+            'client_id'  => $clientId,
+            'client_secret' => $clientSecret,
+            // evtl. scope/realm-Parameter:
+            // 'scope' => 'vehicle:read',
+            // 'realm' => $realm,
+        ]);
+
+        $ch = curl_init($tokenUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $post,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
+        ]);
+
+        // Falls der Token-Endpoint mTLS verlangt: 
+        try {
+            $this->configureCurlMtls($ch);
+        } catch (\Throwable $e) {
+            IPS_LogMessage("PSAVehicle", "RequestPsaCode (Token): TLS-Config fehlgeschlagen: " . $e->getMessage());
+            curl_close($ch);
+            return false;
+        }
+
+        $resp = curl_exec($ch);
+        if ($resp === false) {
+            IPS_LogMessage("PSAVehicle", "RequestPsaCode (Token): cURL Fehler: " . curl_error($ch));
+            curl_close($ch);
+            return false;
+        }
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($code !== 200) {
+            IPS_LogMessage("PSAVehicle", "RequestPsaCode (Token): HTTP $code -> $resp");
+            SetValueString($this->GetIDForIdent("PSACode"), "Fehler: $code");
+            return false;
+        }
+
+        $json = json_decode($resp, true);
+        $token = $json['access_token'] ?? null;
+        if (!$token) {
+            IPS_LogMessage("PSAVehicle", "RequestPsaCode (Token): access_token nicht gefunden.");
+            return false;
+        }
+
+        // Token ins Modul schreiben
+        IPS_SetProperty($this->InstanceID, "AccessToken", $token);
+        IPS_ApplyChanges($this->InstanceID);
+
+        SetValueString($this->GetIDForIdent("PSACode"), "AccessToken erhalten (gekürzt): " . substr($token, 0, 12) . "...");
+        return true;
+    }
+
     private function applyCertTypeVisibility(string $certType): void
     {
         $showKey = ($certType === 'PEM_GETRENNT');
@@ -304,22 +595,22 @@ class PSAVehicle extends IPSModule
     private function UpdateMap(float $lat, float $lon): void
     {
         $html = <<<HTML
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-<div id="map" style="width:100%; height:400px;"></div>
-<script>
-(function() {
-  var map = L.map('map').setView([$lat, $lon], 15);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '© OpenStreetMap-Mitwirkende'
-  }).addTo(map);
-  L.marker([$lat, $lon]).addTo(map)
-    .bindPopup('Fahrzeugstandort')
-    .openPopup();
-})();
-</script>
-HTML;
+        <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+        <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+        <div id="map" style="width:100%; height:400px;"></div>
+        <script>
+        (function() {
+        var map = L.map('map').setView([$lat, $lon], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap-Mitwirkende'
+        }).addTo(map);
+        L.marker([$lat, $lon]).addTo(map)
+            .bindPopup('Fahrzeugstandort')
+            .openPopup();
+        })();
+        </script>
+        HTML;
         $varID = $this->GetIDForIdent('MapHTML');
         if ($varID === 0) {
             $varID = $this->RegisterVariableString('MapHTML', 'Karte', '~HTMLBox');
