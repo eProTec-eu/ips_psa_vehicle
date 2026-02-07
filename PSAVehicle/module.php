@@ -610,26 +610,6 @@ class PSAVehicle extends IPSModule
     }
 
     /**
-     * Sucht <brand>.apk zuerst in flobz/psa_apk, dann in flobz/psa_car_controller
-     * und durchsucht dabei jeweils die letzten N Releases.
-     */
-    private function resolveFlobzApkDownloadUrlDeep(string $brandApkFilename, int $maxReleases = 8): ?string
-    {
-        $repos = [
-            ['owner' => 'flobz', 'repo' => 'psa_apk'],
-            ['owner' => 'flobz', 'repo' => 'psa_car_controller']
-        ];
-        foreach ($repos as $r) {
-            $url = $this->githubFindApkAcrossReleases($r['owner'], $r['repo'], $brandApkFilename, $maxReleases);
-            if ($url !== null) {
-                IPS_LogMessage("PSAVehicle", "APK in {$r['owner']}/{$r['repo']} gefunden: {$brandApkFilename}");
-                return $url;
-            }
-        }
-        return null;
-    }
-
-    /**
      * Findet PFX-Datei(en) in einer APK und liefert relative Pfade zurück (z. B. assets/MWPMYMA1.pfx).
      * @return string[] Liste relativer Pfade im APK
      */
