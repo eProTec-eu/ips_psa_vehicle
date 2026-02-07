@@ -421,6 +421,37 @@ class PSAVehicle extends IPSModule
             return false;
         }
 
+        // 7) PEM-Dateien sicher schreiben
+        $certPemPath = $cacheDir . "/client_cert.pem";
+        $keyPemPath  = $cacheDir . "/client_key.pem";
+        if (@file_put_contents($certPemPath, $certPem) === false || @chmod($certPemPath, 0600) === false) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: client_cert.pem konnte nicht gespeichert/gesetzt werden.");
+            return false;
+        }
+        if (@file_put_contents($keyPemPath, $keyPem) === false || @chmod($keyPemPath, 0600) === false) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: client_key.pem konnte nicht gespeichert/gesetzt werden.");
+            return false;
+        }
+
+        // 8) Modul-Properties setzen (mTLS → PEM getrennt)
+        IPS_SetProperty($this->InstanceID, "CertType", "PEM_GETRENNT");
+        IPS_SetProperty($this->InstanceID, "CertPath", $certPemPath);
+        IPS_SetProperty($this->InstanceID, "KeyPath",  $keyPemPath);
+        // (Optional) falls du eigenes CA-Bundle hast:
+        // IPS_SetProperty($this->InstanceID, "CAPath", "/etc/ssl/certs/ca-bundle.crt");
+
+        // (Optional) gleich Marken-Auth/Token/Device-URL & Realm setzen
+        $this->AutoSetAuthFromVin();
+
+        if (!IPS_ApplyChanges($this->InstanceID)) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: IPS_ApplyChanges fehlgeschlagen.");
+            return false;
+        }
+
+        IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: OK – Zertifikate aktualisiert aus {$apkFileName}");
+        return true;
+    }
+
     /**
      * Versucht in Reihenfolge die Releases/Assets zu lesen:
      *   1) flobz/psa_apk      (primär)
@@ -490,37 +521,6 @@ class PSAVehicle extends IPSModule
         }
         $json = json_decode($resp, true);
         return is_array($json) ? $json : null;
-    }
-
-        // 7) PEM-Dateien sicher schreiben
-        $certPemPath = $cacheDir . "/client_cert.pem";
-        $keyPemPath  = $cacheDir . "/client_key.pem";
-        if (@file_put_contents($certPemPath, $certPem) === false || @chmod($certPemPath, 0600) === false) {
-            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: client_cert.pem konnte nicht gespeichert/gesetzt werden.");
-            return false;
-        }
-        if (@file_put_contents($keyPemPath, $keyPem) === false || @chmod($keyPemPath, 0600) === false) {
-            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: client_key.pem konnte nicht gespeichert/gesetzt werden.");
-            return false;
-        }
-
-        // 8) Modul-Properties setzen (mTLS → PEM getrennt)
-        IPS_SetProperty($this->InstanceID, "CertType", "PEM_GETRENNT");
-        IPS_SetProperty($this->InstanceID, "CertPath", $certPemPath);
-        IPS_SetProperty($this->InstanceID, "KeyPath",  $keyPemPath);
-        // (Optional) falls du eigenes CA-Bundle hast:
-        // IPS_SetProperty($this->InstanceID, "CAPath", "/etc/ssl/certs/ca-bundle.crt");
-
-        // (Optional) gleich Marken-Auth/Token/Device-URL & Realm setzen
-        $this->AutoSetAuthFromVin();
-
-        if (!IPS_ApplyChanges($this->InstanceID)) {
-            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: IPS_ApplyChanges fehlgeschlagen.");
-            return false;
-        }
-
-        IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: OK – Zertifikate aktualisiert aus {$apkFileName}");
-        return true;
     }
 
     /**
