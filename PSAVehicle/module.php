@@ -1,35 +1,47 @@
 <?php
-
 class PSAVehicle extends IPSModule
 {
     public function Create()
     {
         parent::Create();
-
+        // ---- API / Fahrzeug ----
         $this->RegisterPropertyString("ClientID", "");
         $this->RegisterPropertyString("ClientSecret", "");
         $this->RegisterPropertyString("AccessToken", "");
         $this->RegisterPropertyString("Realm", "");
         $this->RegisterPropertyString("VIN", "");
+
+        // ---- Zertifikate / mTLS ----
         $this->RegisterPropertyString("CertPath", "");
         $this->RegisterPropertyString("KeyPath", "");
         $this->RegisterPropertyString("CAPath", "");
-        
         $this->RegisterPropertyString("CertType", "PEM_GETRENNT"); // oder: PEM_COMBINED | P12
-        $this->RegisterPropertyString("CertPass", "");             // PFX- oder PEM-Passwort
-        $this->RegisterPropertyString("KeyPass", "");              // nur für getrennten PEM-Key
+        $this->RegisterPropertyString("CertPass", ""); // PFX- oder PEM-Passwort
+        $this->RegisterPropertyString("KeyPass", ""); // nur für getrennten PEM-Key
         $this->RegisterPropertyBoolean("VerifyPeer", true);
-        $this->RegisterPropertyInteger("VerifyHost", 2);           // 0, 1, 2 (2 = Common Name/SubjectAltName prüfen)
+        $this->RegisterPropertyInteger("VerifyHost", 2); // 0,1,2 (2 = CN/SAN prüfen)
 
+        // ---- OAuth / Device-Code ----
+        $this->RegisterPropertyString("AuthURL", "");     // wird automatisch aus VIN/Marke gesetzt
+        $this->RegisterPropertyString("TokenURL", "");    // wird automatisch aus VIN/Marke gesetzt
+        $this->RegisterPropertyString("DeviceURL", "");   // z.B. https://{host}/am/oauth2/device/code
+        $this->RegisterPropertyString("Scope", "openid profile");
+        // Attribute für Device-Code-Flow (temporär)
+        $this->RegisterAttributeString("DeviceCode", "");
+        $this->RegisterAttributeString("DeviceInterval", "");
+
+        // ---- Timer für Device-Code-Polling (ms; 0=aus) ----
+        $this->RegisterTimer('DeviceCodePollTimer', 0, 'PSAVehicle_PollDeviceCode($_IPS[\'TARGET\']);');
+
+        // ---- Variablen ----
         $this->RegisterVariableFloat("BatteryLevel", "Ladestand (%)", "~Battery.100", 1);
         $this->RegisterVariableFloat("Range", "Reichweite (km)", "", 2);
         $this->RegisterVariableFloat("Odometer", "Kilometerstand (km)", "", 3);
         $this->RegisterVariableFloat("Latitude", "Latitude", "", 4);
         $this->RegisterVariableFloat("Longitude", "Longitude", "", 5);
-
         $this->RegisterVariableString("MapHTML", "Standortkarte", "~HTMLBox", 6);
+        $this->RegisterVariableString("PSACode", "PSA Code / Status", "", 10);
     }
-
 
     public function ApplyChanges()
     {
@@ -38,42 +50,58 @@ class PSAVehicle extends IPSModule
 
     public function GetConfigurationForm()
     {
-        // Aktuellen Zustand lesen, um initiale Sichtbarkeit korrekt zu setzen
-        $certType    = strtoupper($this->ReadPropertyString("CertType"));
-        $showKey     = ($certType === 'PEM_GETRENNT');                          // KeyPath nur bei getrennten PEMs
-        $showKeyPwd  = ($certType !== 'P12');                                   // KeyPass bei PEM sinnvoll
-        $showCertPwd = ($certType === 'P12' || $certType === 'PEM_COMBINED');   // häufig bei P12/combined
+        $certType = strtoupper($this->ReadPropertyString("CertType"));
+        $showKey = ($certType === 'PEM_GETRENNT');
+        $showKeyPwd = ($certType !== 'P12');
+        $showCertPwd = ($certType === 'P12' || $certType === 'PEM_COMBINED');
 
         $form = [
             "elements" => [
-
                 // Allgemein
                 [
-                    "type"    => "ExpansionPanel",
+                    "type" => "ExpansionPanel",
                     "caption" => "Allgemein",
-                    "items"   => [
+                    "items" => [
                         ["type" => "Label", "caption" => "Basisdaten für das Fahrzeug und die API."],
                         ["type" => "ValidationTextBox", "name" => "VIN", "caption" => "Fahrzeug-VIN"],
                         [
-                            "type"  => "RowLayout",
+                            "type" => "RowLayout",
                             "items" => [
-                                ["type" => "ValidationTextBox", "name" => "Realm",       "caption" => "Realm"],
+                                ["type" => "ValidationTextBox", "name" => "Realm", "caption" => "Realm"],
                                 ["type" => "ValidationTextBox", "name" => "AccessToken", "caption" => "Access Token (Bearer)"]
                             ]
                         ]
                     ]
                 ],
 
+                // OAuth 2.0 / Device-Code
+                [
+                    "type" => "ExpansionPanel",
+                    "caption" => "OAuth 2.0 / Device-Code",
+                    "items" => [
+                        ["type" => "Label", "caption" => "OAuth-Endpoints (werden aus VIN/Marke gesetzt) und Scope."],
+                        [
+                            "type" => "RowLayout",
+                            "items" => [
+                                ["type" => "ValidationTextBox", "name" => "AuthURL",  "caption" => "AuthURL (/am/oauth2/authorize)"],
+                                ["type" => "ValidationTextBox", "name" => "TokenURL", "caption" => "TokenURL (/am/oauth2/access_token)"]
+                            ]
+                        ],
+                        ["type" => "ValidationTextBox", "name" => "DeviceURL", "caption" => "DeviceURL (/am/oauth2/device/code)"],
+                        ["type" => "ValidationTextBox", "name" => "Scope", "caption" => "Scope (z.B. openid profile)"]
+                    ]
+                ],
+
                 // Authentifizierung (Client)
                 [
-                    "type"    => "ExpansionPanel",
+                    "type" => "ExpansionPanel",
                     "caption" => "Authentifizierung (Client)",
-                    "items"   => [
+                    "items" => [
                         ["type" => "Label", "caption" => "Client-Zugangsdaten (aus App-Registrierung/Setup)."],
                         [
-                            "type"  => "RowLayout",
+                            "type" => "RowLayout",
                             "items" => [
-                                ["type" => "ValidationTextBox", "name" => "ClientID",     "caption" => "Client ID"],
+                                ["type" => "ValidationTextBox", "name" => "ClientID", "caption" => "Client ID"],
                                 ["type" => "ValidationTextBox", "name" => "ClientSecret", "caption" => "Client Secret"]
                             ]
                         ]
@@ -82,50 +110,49 @@ class PSAVehicle extends IPSModule
 
                 // mTLS / Zertifikate
                 [
-                    "type"    => "ExpansionPanel",
+                    "type" => "ExpansionPanel",
                     "caption" => "mTLS / Zertifikate",
-                    "items"   => [
+                    "items" => [
                         ["type" => "Label", "caption" => "Zertifikatsmodus auswählen und Pfade/Passwörter hinterlegen."],
                         [
-                            "type"     => "Select",
-                            "name"     => "CertType",
-                            "caption"  => "Zertifikatstyp",
-                            "options"  => [
+                            "type" => "Select",
+                            "name" => "CertType",
+                            "caption" => "Zertifikatstyp",
+                            "options" => [
                                 ["caption" => "PEM (getrennt: Zertifikat + Private Key)", "value" => "PEM_GETRENNT"],
                                 ["caption" => "PEM (combined: Zertifikat+Key in einer Datei)", "value" => "PEM_COMBINED"],
                                 ["caption" => "PKCS#12 (.p12 / .pfx)", "value" => "P12"]
                             ],
-                            // WICHTIG: Literal-String mit Platzhaltern ($id, $CertType) -> einfache Anführungszeichen!
                             "onChange" => 'PSAVehicle_CertTypeChanged($id, $CertType);'
                         ],
                         [
-                            "type"  => "RowLayout",
+                            "type" => "RowLayout",
                             "items" => [
                                 [
-                                    "type"    => "ValidationTextBox",
-                                    "name"    => "CertPath",
+                                    "type" => "ValidationTextBox",
+                                    "name" => "CertPath",
                                     "caption" => ($certType === 'P12') ? "Pfad Zertifikat (.p12/.pfx)" : "Pfad Zertifikat (.pem)"
                                 ],
                                 [
-                                    "type"    => "ValidationTextBox",
-                                    "name"    => "KeyPath",
+                                    "type" => "ValidationTextBox",
+                                    "name" => "KeyPath",
                                     "caption" => "Pfad Private Key (.pem) – bei P12/combined leer lassen",
                                     "visible" => $showKey
                                 ]
                             ]
                         ],
                         [
-                            "type"  => "RowLayout",
+                            "type" => "RowLayout",
                             "items" => [
                                 [
-                                    "type"    => "ValidationTextBox",
-                                    "name"    => "CertPass",
+                                    "type" => "ValidationTextBox",
+                                    "name" => "CertPass",
                                     "caption" => "Zertifikat/Bundle Passwort (optional)",
                                     "visible" => $showCertPwd
                                 ],
                                 [
-                                    "type"    => "ValidationTextBox",
-                                    "name"    => "KeyPass",
+                                    "type" => "ValidationTextBox",
+                                    "name" => "KeyPass",
                                     "caption" => "Private-Key Passwort (optional)",
                                     "visible" => $showKeyPwd
                                 ]
@@ -137,15 +164,15 @@ class PSAVehicle extends IPSModule
 
                 // TLS / Server-Verifikation
                 [
-                    "type"    => "ExpansionPanel",
+                    "type" => "ExpansionPanel",
                     "caption" => "TLS / Server-Verifikation",
-                    "items"   => [
+                    "items" => [
                         ["type" => "Label", "caption" => "CA-Truststore und Prüfungen für die Server-Zertifikatsvalidierung."],
                         ["type" => "ValidationTextBox", "name" => "CAPath", "caption" => "Pfad CA-Bundle (.pem)"],
                         [
-                            "type"  => "RowLayout",
+                            "type" => "RowLayout",
                             "items" => [
-                                ["type" => "CheckBox",      "name" => "VerifyPeer", "caption" => "Peer-Zertifikat prüfen (CURLOPT_SSL_VERIFYPEER)"],
+                                ["type" => "CheckBox", "name" => "VerifyPeer", "caption" => "Peer-Zertifikat prüfen (CURLOPT_SSL_VERIFYPEER)"],
                                 ["type" => "NumberSpinner", "name" => "VerifyHost", "caption" => "Host-Prüfung (0/1/2)", "minimum" => 0, "maximum" => 2]
                             ]
                         ]
@@ -154,9 +181,9 @@ class PSAVehicle extends IPSModule
 
                 // Hinweise
                 [
-                    "type"    => "ExpansionPanel",
+                    "type" => "ExpansionPanel",
                     "caption" => "Hinweise",
-                    "items"   => [
+                    "items" => [
                         ["type" => "Label", "caption" => "• CA-Bundle dient NUR der Server-Verifikation, nicht der Client-Auth."],
                         ["type" => "Label", "caption" => "• Absolute Pfade & Leserechte sicherstellen (Private Keys restriktiv, z. B. 0600)."],
                         ["type" => "Label", "caption" => "• Bei P12/PFX ist meist ein Passwort notwendig."]
@@ -164,20 +191,40 @@ class PSAVehicle extends IPSModule
                 ]
             ],
 
-            // Aktionen (Buttons) – ebenfalls literal (einfaches Quote), damit $id erhalten bleibt
+            // Aktionen
             "actions" => [
                 [
-                    "type"    => "Button",
-                    "label"   => "Fahrzeugdaten aktualisieren (API-Call)",
+                    "type" => "Button",
+                    "label" => "Fahrzeugdaten aktualisieren (API-Call)",
                     "onClick" => 'PSAVehicle_UpdateVehicleData($id);'
                 ],
                 [
-                    "type"    => "Button",
-                    "label"   => "TLS-Handschlag testen (optional)",
+                    "type" => "Button",
+                    "label" => "AuthURL automatisch aus VIN setzen",
+                    "onClick" => 'PSAVehicle_AutoSetAuthFromVin($id);'
+                ],
+                [
+                    "type" => "Button",
+                    "label" => "Device-Code-Flow starten",
+                    "onClick" => 'PSAVehicle_StartDeviceCode($id);'
+                ],
+                [
+                    "type" => "Button",
+                    "label" => "Device-Code-Flow: Polling",
+                    "onClick" => 'PSAVehicle_PollDeviceCode($id);'
+                ],
+                [
+                    "type" => "Button",
+                    "label" => "Device-Code-Flow: Stop Polling",
+                    "onClick" => 'PSAVehicle_StopDeviceCodePolling($id);'
+                ],
+                [
+                    "type" => "Button",
+                    "label" => "TLS-Handschlag testen (optional)",
                     "onClick" => 'PSAVehicle_TestTlsHandshake($id);'
                 ],
                 [
-                    "type"    => "Label",
+                    "type" => "Label",
                     "caption" => "Der TLS-Test erfordert die Implementierung von TestTlsHandshake() im Modul."
                 ]
             ]
@@ -192,31 +239,23 @@ class PSAVehicle extends IPSModule
         if (!$data) {
             return false;
         }
-
         $json = json_decode($data, true);
-
         if (isset($json['batteryLevel'])) {
             SetValue($this->GetIDForIdent("BatteryLevel"), floatval($json['batteryLevel']));
         }
-
         if (isset($json['range']['value'])) {
             SetValue($this->GetIDForIdent("Range"), floatval($json['range']['value']));
         }
-
         if (isset($json['odometer']['value'])) {
             SetValue($this->GetIDForIdent("Odometer"), floatval($json['odometer']['value']));
         }
-
         if (isset($json['position'])) {
             $lat = $json['position']['latitude'];
             $lon = $json['position']['longitude'];
-
             SetValue($this->GetIDForIdent("Latitude"), floatval($lat));
             SetValue($this->GetIDForIdent("Longitude"), floatval($lon));
-
             $this->UpdateMap($lat, $lon);
         }
-
         return true;
     }
 
@@ -252,79 +291,55 @@ class PSAVehicle extends IPSModule
 
     private function applyCertTypeVisibility(string $certType): void
     {
-        // Sichtbarkeitslogik wie oben
-        $showKey     = ($certType === 'PEM_GETRENNT');
-        $showKeyPwd  = ($certType !== 'P12');
+        $showKey = ($certType === 'PEM_GETRENNT');
+        $showKeyPwd = ($certType !== 'P12');
         $showCertPwd = ($certType === 'P12' || $certType === 'PEM_COMBINED');
-
-        // Felder live umschalten
         $this->UpdateFormField('KeyPath', 'visible', $showKey);
         $this->UpdateFormField('KeyPass', 'visible', $showKeyPwd);
         $this->UpdateFormField('CertPass','visible', $showCertPwd);
-
-        // Optional: Captions dynamisch anpassen
-        $captionCert = ($certType === 'P12')
-            ? 'Pfad Zertifikat (.p12/.pfx)'
-            : 'Pfad Zertifikat (.pem)';
+        $captionCert = ($certType === 'P12') ? 'Pfad Zertifikat (.p12/.pfx)' : 'Pfad Zertifikat (.pem)';
         $this->UpdateFormField('CertPath', 'caption', $captionCert);
-
-        // Wenn du möchtest, kannst du hier auch Tooltips/Labels ändern
-        // $this->UpdateFormField('CertPass', 'caption', $showCertPwd ? 'Zertifikat/Bundle Passwort (optional)' : '...');
-
-        // Kein Reload nötig, IPS zeigt Änderungen sofort an
-    }    
+    }
 
     private function UpdateMap(float $lat, float $lon): void
     {
-        // HTML-Inhalt als HEREDOC bauen. Variablen {$lat} und {$lon} werden interpoliert.
         $html = <<<HTML
-        <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-        <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-
-        <div id="map" style="width:100%; height:400px;"></div>
-
-        <script>
-        // Warten, bis Leaflet geladen ist
-        (function() {
-            var map = L.map('map').setView([{$lat}, {$lon}], 15);
-
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                maxZoom: 19,
-                attribution: '&copy; OpenStreetMap-Mitwirkende'
-            }).addTo(map);
-
-            L.marker([{$lat}, {$lon}]).addTo(map)
-                .bindPopup('Fahrzeugstandort')
-                .openPopup();
-        })();
-        </script>
-        HTML;
-
-        // In Variable mit Ident "MapHTML" schreiben (Profil ~HTMLBox erforderlich)
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<div id="map" style="width:100%; height:400px;"></div>
+<script>
+(function() {
+  var map = L.map('map').setView([$lat, $lon], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '© OpenStreetMap-Mitwirkende'
+  }).addTo(map);
+  L.marker([$lat, $lon]).addTo(map)
+    .bindPopup('Fahrzeugstandort')
+    .openPopup();
+})();
+</script>
+HTML;
         $varID = $this->GetIDForIdent('MapHTML');
         if ($varID === 0) {
-            // Falls noch nicht vorhanden: anlegen
             $varID = $this->RegisterVariableString('MapHTML', 'Karte', '~HTMLBox');
         } else {
-            // Sicherstellen, dass Profil korrekt gesetzt ist
             IPS_SetVariableCustomProfile($varID, '~HTMLBox');
         }
-
         SetValueString($varID, $html);
     }
 
     private function configureCurlMtls($ch): void
     {
-        $type      = strtoupper($this->ReadPropertyString("CertType"));   // PEM_GETRENNT | PEM_COMBINED | P12
-        $certPath  = $this->ReadPropertyString("CertPath");
-        $keyPath   = $this->ReadPropertyString("KeyPath");
-        $caPath    = $this->ReadPropertyString("CAPath");
-        $certPass  = $this->ReadPropertyString("CertPass");
-        $keyPass   = $this->ReadPropertyString("KeyPass");
+        $type = strtoupper($this->ReadPropertyString("CertType")); // PEM_GETRENNT | PEM_COMBINED | P12
+        $certPath = $this->ReadPropertyString("CertPath");
+        $keyPath = $this->ReadPropertyString("KeyPath");
+        $caPath = $this->ReadPropertyString("CAPath");
+        $certPass = $this->ReadPropertyString("CertPass");
+        $keyPass = $this->ReadPropertyString("KeyPass");
         $verifyPeer = (bool)$this->ReadPropertyBoolean("VerifyPeer");
         $verifyHost = (int)$this->ReadPropertyInteger("VerifyHost");
 
-        // Basissicherheit
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, $verifyPeer);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, $verifyHost);
         if (!empty($caPath)) {
@@ -333,7 +348,6 @@ class PSAVehicle extends IPSModule
 
         switch ($type) {
             case 'P12':
-                // .p12/.pfx: nur SSLCERT + TYPE + PASSWORT (kein separater SSLKEY nötig)
                 if (!$this->isReadableFile($certPath)) {
                     throw new InvalidArgumentException("P12-Datei nicht lesbar: $certPath");
                 }
@@ -343,15 +357,12 @@ class PSAVehicle extends IPSModule
                     curl_setopt($ch, CURLOPT_SSLCERTPASSWD, $certPass);
                 }
                 break;
-
             case 'PEM_COMBINED':
-                // Eine PEM-Datei enthält sowohl CERT als auch PRIVATE KEY
                 if (!$this->isReadableFile($certPath)) {
                     throw new InvalidArgumentException("Combined-PEM nicht lesbar: $certPath");
                 }
                 curl_setopt($ch, CURLOPT_SSLCERT, $certPath);
-                curl_setopt($ch, CURLOPT_SSLKEY,  $certPath);
-                // Optional: Passwörter, falls verschlüsselt
+                curl_setopt($ch, CURLOPT_SSLKEY, $certPath);
                 if (!empty($certPass)) {
                     curl_setopt($ch, CURLOPT_SSLCERTPASSWD, $certPass);
                 }
@@ -359,10 +370,8 @@ class PSAVehicle extends IPSModule
                     curl_setopt($ch, CURLOPT_SSLKEYPASSWD, $keyPass);
                 }
                 break;
-
             case 'PEM_GETRENNT':
             default:
-                // Getrennte PEMs für CERT und KEY
                 if (!$this->isReadableFile($certPath)) {
                     throw new InvalidArgumentException("Zertifikat (PEM) nicht lesbar: $certPath");
                 }
@@ -370,14 +379,13 @@ class PSAVehicle extends IPSModule
                     throw new InvalidArgumentException("Private Key (PEM) nicht lesbar: $keyPath");
                 }
                 curl_setopt($ch, CURLOPT_SSLCERT, $certPath);
-                curl_setopt($ch, CURLOPT_SSLKEY,  $keyPath);
+                curl_setopt($ch, CURLOPT_SSLKEY, $keyPath);
                 if (!empty($certPass)) {
                     curl_setopt($ch, CURLOPT_SSLCERTPASSWD, $certPass);
                 }
                 if (!empty($keyPass)) {
                     curl_setopt($ch, CURLOPT_SSLKEYPASSWD, $keyPass);
                 }
-                // curl_setopt($ch, CURLOPT_SSLCERTTYPE, 'PEM'); // Standard ist PEM, daher optional
                 break;
         }
     }
@@ -389,37 +397,29 @@ class PSAVehicle extends IPSModule
 
     private function isAbsolutePath(string $path): bool
     {
-        // Linux/Unix: beginnt mit '/'
         if (strlen($path) > 0 && $path[0] === '/') {
-            return true;
+            return true; // Unix
         }
-        // Windows: Laufwerksbuchstabe + ':\' (falls jemals auf Windows genutzt)
-        if (preg_match('/^[A-Za-z]:\\\\/', $path) === 1) {
-            return true;
+        if (preg_match('/^[A-Za-z]:\\\\\\\\/', $path) === 1) {
+            return true; // Windows
         }
         return false;
     }
 
-    /**
-     * Validiert Pfade/Typen für mTLS.
-     * @return bool true = OK, false = Fehler (wird geloggt).
-     */
     private function validateMtlsPaths(): bool
     {
-        $type     = strtoupper($this->ReadPropertyString("CertType")); // PEM_GETRENNT | PEM_COMBINED | P12
+        $type = strtoupper($this->ReadPropertyString("CertType"));
         $certPath = $this->ReadPropertyString("CertPath");
-        $keyPath  = $this->ReadPropertyString("KeyPath");
-        $caPath   = $this->ReadPropertyString("CAPath");
+        $keyPath = $this->ReadPropertyString("KeyPath");
+        $caPath = $this->ReadPropertyString("CAPath");
 
-        // 1) Absolute Pfade prüfen (wo eingegeben)
-        foreach (['CertPath' => $certPath, 'KeyPath' => $keyPath, 'CAPath' => $caPath] as $label => $p) {
+        foreach ([ 'CertPath' => $certPath, 'KeyPath' => $keyPath, 'CAPath' => $caPath ] as $label => $p) {
             if (!empty($p) && !$this->isAbsolutePath($p)) {
                 IPS_LogMessage("PSAVehicle", "$label ist kein absoluter Pfad: $p");
                 return false;
             }
         }
 
-        // 2) Typabhängige Anforderungen
         switch ($type) {
             case 'P12':
                 if (empty($certPath)) {
@@ -435,7 +435,6 @@ class PSAVehicle extends IPSModule
                     return false;
                 }
                 break;
-
             case 'PEM_COMBINED':
                 if (empty($certPath)) {
                     IPS_LogMessage("PSAVehicle", "PEM (combined) ausgewählt, aber CertPath ist leer.");
@@ -445,12 +444,10 @@ class PSAVehicle extends IPSModule
                     IPS_LogMessage("PSAVehicle", "Combined-PEM nicht lesbar: $certPath");
                     return false;
                 }
-                // KeyPath optional/leer – wenn befüllt, warnen:
                 if (!empty($keyPath)) {
                     IPS_LogMessage("PSAVehicle", "Hinweis: Bei PEM (combined) wird KeyPath nicht benötigt und sollte leer bleiben.");
                 }
                 break;
-
             case 'PEM_GETRENNT':
             default:
                 if (empty($certPath) || empty($keyPath)) {
@@ -468,7 +465,6 @@ class PSAVehicle extends IPSModule
                 break;
         }
 
-        // 3) CA-Bundle (optional aber empfohlen)
         if (!empty($caPath) && !$this->isReadableFile($caPath)) {
             IPS_LogMessage("PSAVehicle", "CA-Bundle nicht lesbar: $caPath");
             return false;
@@ -476,37 +472,32 @@ class PSAVehicle extends IPSModule
         if (empty($caPath)) {
             IPS_LogMessage("PSAVehicle", "Hinweis: CAPath ist leer – Server-Verifikation (CURLOPT_CAINFO) wäre damit nicht explizit gesetzt.");
         }
-
         return true;
     }
 
     public function GetVehicleData()
     {
-        // Vorab: Pfad-/Typ-Validierung
         if (!$this->validateMtlsPaths()) {
             IPS_LogMessage("PSAVehicle", "Abbruch: Pfad-/Typ-Validierung fehlgeschlagen.");
             return false;
         }
-
-        $token    = $this->ReadPropertyString("AccessToken");
-        $realm    = $this->ReadPropertyString("Realm");
-        $vin      = $this->ReadPropertyString("VIN");
+        $token = $this->ReadPropertyString("AccessToken");
+        $realm = $this->ReadPropertyString("Realm");
+        $vin = $this->ReadPropertyString("VIN");
         $clientID = $this->ReadPropertyString("ClientID");
 
-        $url    = "https://api.groupe-psa.com/connectedcar/v4/vehicle/$vin";
+        $url = "https://api.groupe-psa.com/connectedcar/v4/vehicle/$vin";
         $params = http_build_query(["client_id" => $clientID]);
-
         $ch = curl_init();
         curl_setopt_array($ch, [
-            CURLOPT_URL            => $url . "?" . $params,
+            CURLOPT_URL => $url . "?" . $params,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER     => [
+            CURLOPT_HTTPHEADER => [
                 "Authorization: Bearer $token",
                 "x-introspect-realm: $realm"
             ],
-            CURLOPT_TIMEOUT        => 30
+            CURLOPT_TIMEOUT => 30
         ]);
-
         try {
             $this->configureCurlMtls($ch);
         } catch (\Throwable $e) {
@@ -514,28 +505,24 @@ class PSAVehicle extends IPSModule
             curl_close($ch);
             return false;
         }
-
         $response = curl_exec($ch);
         if ($response === false) {
             $err = curl_error($ch);
-            $no  = curl_errno($ch);
+            $no = curl_errno($ch);
             IPS_LogMessage("PSAVehicle", "cURL-Fehler ($no): $err");
             curl_close($ch);
             return false;
         }
-
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
-
         if ($code !== 200) {
             IPS_LogMessage("PSAVehicle", "API Fehler $code: $response");
             return false;
         }
-
         return $response;
     }
 
-    //nur Behelfsweise, wird nur benötigt um die PSA APK von flobz zu zerlegen!!!
+    // nur Behelfsweise, wird nur benötigt um die PSA APK von flobz zu zerlegen!!!
     private function extractPemFromApk(string $apkPath, string $pfxRelative = 'assets/MWPMYMA1.pfx', string $pfxPassword = ''): array
     {
         $zip = new ZipArchive();
@@ -547,15 +534,283 @@ class PSAVehicle extends IPSModule
         if ($pfxData === false) {
             throw new RuntimeException("PFX nicht gefunden in APK: $pfxRelative");
         }
-
-        // PKCS#12 nach PEM zerlegen
         $certs = [];
         if (!openssl_pkcs12_read($pfxData, $certs, $pfxPassword)) {
             throw new RuntimeException("PFX konnte nicht gelesen werden (Passwort?).");
         }
-        // $certs['cert'], $certs['pkey'], $certs['extracerts'] verfügbar
         $certPem = $certs['cert'];
-        $keyPem  = $certs['pkey'];
+        $keyPem = $certs['pkey'];
         return [$certPem, $keyPem];
+    }
+
+    /* ============================
+     *  MARKENERKENNUNG & AUTH-URL
+     * ============================ */
+
+    // Button-Handler: Setzt AuthURL/TokenURL/DeviceURL/Realm aus VIN.
+    public function AutoSetAuthFromVin(): bool
+    {
+        $vin = strtoupper(trim($this->ReadPropertyString("VIN")));
+        if ($vin === "" || strlen($vin) < 3) {
+            IPS_LogMessage("PSAVehicle", "AutoSetAuthFromVin: VIN fehlt/zu kurz.");
+            return false;
+        }
+        $brand = $this->brandFromVin($vin);
+        if ($brand === null) {
+            IPS_LogMessage("PSAVehicle", "AutoSetAuthFromVin: Marke aus VIN nicht erkennbar.");
+            return false;
+        }
+        $host  = $this->authHostForBrand($brand);
+        $realm = $this->realmForBrand($brand);
+        if ($host === null || $realm === null) {
+            IPS_LogMessage("PSAVehicle", "AutoSetAuthFromVin: Kein Host/Realm für Marke {$brand}.");
+            return false;
+        }
+        $authUrl   = "https://{$host}/am/oauth2/authorize";
+        $tokenUrl  = "https://{$host}/am/oauth2/access_token";
+        $deviceUrl = "https://{$host}/am/oauth2/device/code"; // ggf. anpassen, falls abweichend
+
+        IPS_SetProperty($this->InstanceID, "AuthURL",  $authUrl);
+        IPS_SetProperty($this->InstanceID, "TokenURL", $tokenUrl);
+        IPS_SetProperty($this->InstanceID, "DeviceURL", $deviceUrl);
+        IPS_SetProperty($this->InstanceID, "Realm",    $realm);
+
+        $ok = IPS_ApplyChanges($this->InstanceID);
+        if ($ok) {
+            IPS_LogMessage("PSAVehicle", "AutoSetAuthFromVin: {$brand} → {$authUrl} / Realm={$realm}");
+        } else {
+            IPS_LogMessage("PSAVehicle", "AutoSetAuthFromVin: IPS_ApplyChanges fehlgeschlagen.");
+        }
+        return $ok;
+    }
+
+    // WMI→Marke für Stellantis (konservatives Mapping).
+    private function brandFromVin(string $vin): ?string
+    {
+        $wmi = strtoupper(substr($vin, 0, 3));
+        $map = [
+            'VF3' => 'Peugeot',
+            'VR3' => 'Peugeot',
+            'VF7' => 'Citroen',
+            'VR7' => 'Citroen',
+            'VR1' => 'DS',
+            'W0L' => 'Opel',
+            'W0V' => 'Opel',
+            'VSX' => 'Opel', // Opel (Spanien) – optional
+            'VXK' => 'Vauxhall',
+        ];
+        return $map[$wmi] ?? null;
+    }
+
+    // Marke→IDP-Host gemäß flobz/PSA-Konfiguration.
+    private function authHostForBrand(string $brand): ?string
+    {
+        $hosts = [
+            'Peugeot'  => 'idpcvs.peugeot.com',
+            'Citroen'  => 'idpcvs.citroen.com',
+            'DS'       => 'idpcvs.driveds.com',
+            'Opel'     => 'idpcvs.opel.com',
+            'Vauxhall' => 'idpcvs.vauxhall.co.uk',
+        ];
+        return $hosts[$brand] ?? null;
+    }
+
+    // Marke→Realm (x-introspect-realm).
+    private function realmForBrand(string $brand): ?string
+    {
+        $realms = [
+            'Peugeot'  => 'clientsB2CPeugeot',
+            'Citroen'  => 'clientsB2CCitroen',
+            'DS'       => 'clientsB2CDS',
+            'Opel'     => 'clientsB2COpel',
+            'Vauxhall' => 'clientsB2CVauxhall',
+        ];
+        return $realms[$brand] ?? null;
+    }
+
+    /* ============================
+     *  DEVICE-CODE-FLOW (OAuth)
+     * ============================ */
+
+    // Startet den Device-Code-Flow: fordert device_code/user_code an und zeigt Anweisungen.
+    public function StartDeviceCode(): bool
+    {
+        $deviceUrl = trim($this->ReadPropertyString("DeviceURL"));
+        $clientId  = trim($this->ReadPropertyString("ClientID"));
+        $scope     = trim($this->ReadPropertyString("Scope"));
+        if ($deviceUrl === "" || $clientId === "") {
+            IPS_LogMessage("PSAVehicle", "StartDeviceCode: DeviceURL oder ClientID fehlt.");
+            return false;
+        }
+        if ($scope === "") { $scope = "openid profile"; }
+
+        $post = http_build_query([
+            'client_id' => $clientId,
+            'scope'     => $scope
+        ]);
+
+        $ch = curl_init($deviceUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $post,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
+        ]);
+
+        try { $this->configureCurlMtls($ch); } catch (\Throwable $e) { IPS_LogMessage("PSAVehicle","StartDeviceCode TLS optional: ".$e->getMessage()); }
+
+        $resp = curl_exec($ch);
+        if ($resp === false) {
+            IPS_LogMessage("PSAVehicle", "StartDeviceCode: cURL Fehler: " . curl_error($ch));
+            curl_close($ch);
+            return false;
+        }
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($http !== 200) {
+            IPS_LogMessage("PSAVehicle","StartDeviceCode: HTTP $http -> $resp");
+            return false;
+        }
+
+        $json = json_decode($resp, true);
+        $device_code = $json['device_code'] ?? null;
+        $user_code   = $json['user_code'] ?? null;
+        $verify_url  = $json['verification_uri_complete'] ?? ($json['verification_uri'] ?? null);
+        $interval    = intval($json['interval'] ?? 5);
+
+        if (!$device_code || !$user_code || !$verify_url) {
+            IPS_LogMessage("PSAVehicle","StartDeviceCode: Antwort unvollständig: $resp");
+            return false;
+        }
+        $this->WriteAttributeString("DeviceCode", $device_code);
+        $this->WriteAttributeString("DeviceInterval", (string)max(3,$interval));
+
+        $varId = $this->ensurePsaCodeVar();
+        $msg = "Öffne: {$verify_url}\nGib diesen Code ein: {$user_code}\n\nPolling startet automatisch.";
+        SetValueString($varId, $msg);
+
+        // Timer einschalten: pollt alle 'interval' Sekunden
+        $this->SetTimerInterval('DeviceCodePollTimer', max(3000, $interval * 1000));
+        return true;
+    }
+
+    // Pollt den Device-Code-Endpunkt zum Token-Exchange (einzelner Poll-Durchlauf).
+    public function PollDeviceCode(): bool
+    {
+        $tokenUrl   = trim($this->ReadPropertyString("TokenURL"));
+        $clientId   = trim($this->ReadPropertyString("ClientID"));
+        $deviceCode = $this->ReadAttributeString("DeviceCode");
+        $interval   = max(3, intval($this->ReadAttributeString("DeviceInterval") ?: "5"));
+
+        if ($deviceCode === "") {
+            // Nichts zu tun: Timer aus
+            $this->SetTimerInterval('DeviceCodePollTimer', 0);
+            return false;
+        }
+
+        if ($tokenUrl === "" || $clientId === "" || $deviceCode === "") {
+            IPS_LogMessage("PSAVehicle","PollDeviceCode: TokenURL/ClientID/DeviceCode fehlt.");
+            return false;
+        }
+
+        $post = http_build_query([
+            'grant_type'  => 'urn:ietf:params:oauth:grant-type:device_code',
+            'device_code' => $deviceCode,
+            'client_id'   => $clientId,
+        ]);
+
+        $ch = curl_init($tokenUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $post,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
+        ]);
+
+        try { $this->configureCurlMtls($ch); } catch (\Throwable $e) { IPS_LogMessage("PSAVehicle","PollDeviceCode TLS optional: ".$e->getMessage()); }
+
+        $resp = curl_exec($ch);
+        if ($resp === false) {
+            IPS_LogMessage("PSAVehicle","PollDeviceCode: cURL Fehler: " . curl_error($ch));
+            curl_close($ch);
+            return false;
+        }
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($http === 200) {
+            $json = json_decode($resp, true);
+            $accessToken  = $json['access_token'] ?? null;
+            $refreshToken = $json['refresh_token'] ?? null;
+            $expiresIn    = $json['expires_in'] ?? null;
+
+            if (!$accessToken) {
+                IPS_LogMessage("PSAVehicle","PollDeviceCode: access_token fehlt.");
+                return false;
+            }
+            IPS_SetProperty($this->InstanceID, "AccessToken", $accessToken);
+            IPS_ApplyChanges($this->InstanceID);
+            if (!empty($refreshToken)) {
+                $this->RegisterAttributeString("RefreshToken", $refreshToken);
+                $this->WriteAttributeString("RefreshToken", $refreshToken);
+            }
+            $varId = $this->ensurePsaCodeVar();
+            SetValueString($varId, "AccessToken erhalten (gekürzt): " . substr($accessToken, 0, 16) . "...; Expires in: " . ($expiresIn ?? '?') . "s");
+
+            // Aufräumen & Timer stoppen
+            $this->SetTimerInterval('DeviceCodePollTimer', 0);
+            $this->WriteAttributeString("DeviceCode", "");
+            $this->WriteAttributeString("DeviceInterval", "");
+            return true;
+        }
+
+        $err = json_decode($resp, true);
+        $errCode = $err['error'] ?? '';
+        $varId = $this->ensurePsaCodeVar();
+
+        if ($errCode === 'authorization_pending') {
+            SetValueString($varId, "Warte auf Bestätigung... (erneut in {$interval}s per Timer)");
+            // sicherstellen, dass Timer aktiv ist
+            $this->SetTimerInterval('DeviceCodePollTimer', max(3000, $interval * 1000));
+            return false;
+        } elseif ($errCode === 'slow_down') {
+            $interval = $interval + 2;
+            $this->WriteAttributeString("DeviceInterval", (string)$interval);
+            SetValueString($varId, "Server verlangsamte Polling. Neues Intervall: {$interval}s");
+            $this->SetTimerInterval('DeviceCodePollTimer', max(3000, $interval * 1000));
+            return false;
+        } else {
+            IPS_LogMessage("PSAVehicle", "PollDeviceCode: Fehler: $resp");
+            SetValueString($varId, "Fehler: " . ($errCode ?: 'unbekannt') . " – Polling gestoppt.");
+            $this->SetTimerInterval('DeviceCodePollTimer', 0);
+            $this->WriteAttributeString("DeviceCode", "");
+            $this->WriteAttributeString("DeviceInterval", "");
+            return false;
+        }
+    }
+
+    // Manuelles Stoppen des Timers/Flows.
+    public function StopDeviceCodePolling(): void
+    {
+        $this->SetTimerInterval('DeviceCodePollTimer', 0);
+        $this->WriteAttributeString("DeviceCode", "");
+        $this->WriteAttributeString("DeviceInterval", "");
+        $varId = $this->ensurePsaCodeVar();
+        SetValueString($varId, "Polling gestoppt.");
+    }
+
+    /* ============================
+     *  HELFER
+     * ============================ */
+
+    private function ensurePsaCodeVar(): int
+    {
+        $varId = $this->GetIDForIdent("PSACode");
+        if ($varId === 0) {
+            $varId = $this->RegisterVariableString("PSACode", "PSA Code / Status", "");
+        }
+        return $varId;
     }
 }
