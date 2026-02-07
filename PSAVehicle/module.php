@@ -47,6 +47,7 @@ class PSAVehicle extends IPSModule
         $this->RegisterPropertyString("FlobzApkPfxPath", "assets/MWPMYMA1.pfx"); // Default aus deinem Helper
         $this->RegisterPropertyString("FlobzApkPfxPass", ""); // falls gesetzt
         $this->RegisterPropertyString("CertCacheDir", "/var/lib/symcon/psa_certs"); // anpassen, absolute Pfade!
+        $this->RegisterPropertyString("GithubToken", ""); // optional: Personal Access Token (nur 'public_repo' nötig)
 
         // Optional: Variable, um PSA Code/Status anzuzeigen
         $this->RegisterVariableString("PSACode", "PSA Code / Status", "", 10);
