@@ -205,11 +205,6 @@ class PSAVehicle extends IPSModule
                                 ],
                                 [
                                     "type" => "ValidationTextBox",
-                                    "name" => "FlobzApkPfxPath",
-                                    "caption" => "PFX-Pfad in APK (z. B. assets/MWPMYMA1.pfx)"
-                                ],
-                                [
-                                    "type" => "ValidationTextBox",
                                     "name" => "FlobzApkPfxPass",
                                     "caption" => "PFX-Passwort (falls benötigt)"
                                 ],
@@ -545,40 +540,6 @@ class PSAVehicle extends IPSModule
         }
         $zip->close();
         return $found;
-    }
-
-    /** GitHub: neuestes Release (JSON) holen – optional mit Token zur Erhöhung des Rate-Limits. */
-    private function githubGetLatestRelease(string $owner, string $repo): ?array
-    {
-        $url = "https://api.github.com/repos/{$owner}/{$repo}/releases/latest";
-        $ch  = curl_init($url);
-        $headers = [
-            'User-Agent: PSAVehicle/1.0 (+https://github.com/flobz/psa_car_controller)',
-            'Accept: application/vnd.github+json'
-        ];
-        $token = trim($this->ReadPropertyString("GithubToken"));
-        if ($token !== "") {
-            $headers[] = "Authorization: Bearer {$token}";
-        }
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 20,
-            CURLOPT_HTTPHEADER     => $headers,
-        ]);
-        $resp = curl_exec($ch);
-        if ($resp === false) {
-            IPS_LogMessage("PSAVehicle", "githubGetLatestRelease: cURL Fehler: " . curl_error($ch));
-            curl_close($ch);
-            return null;
-        }
-        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        if ($http !== 200) {
-            IPS_LogMessage("PSAVehicle", "githubGetLatestRelease: HTTP {$http} → {$resp}");
-            return null;
-        }
-        $json = json_decode($resp, true);
-        return is_array($json) ? $json : null;
     }
 
     /** robuster Downloader (auch für GitHub-Assets nutzbar) */
