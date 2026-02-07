@@ -383,6 +383,29 @@ class PSAVehicle extends IPSModule
         // 4) Download-URL über beide Repos auflösen
         // neu (durchsucht mehrere Releases in beiden Repos):
         $downloadUrl = $this->resolveFlobzApkDownloadUrlDeep($apkFileName, 8);
+        
+        $apkPath = null;
+
+        if ($downloadUrl !== null) {
+            // wir haben eine direkte .apk-URL gefunden → herunterladen
+            $apkPath = $cacheDir . "/" . strtolower($brand) . ".apk";
+            if (!$this->downloadFile($downloadUrl, $apkPath, 60)) {
+                IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: APK-Download fehlgeschlagen: {$downloadUrl}");
+                $apkPath = null;
+            }
+        }
+
+        if ($apkPath === null) {
+            // 🔁 NEU: Raw-Fallback aus flobz/psa_apk@main (my*.apk.bz2 → .apk)
+            $apkPath = $this->tryDownloadPsaApkFromRepoRaw($brand, $cacheDir);
+        }
+
+        if ($apkPath === null) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine APK über Releases/Raw verfügbar.");
+            return false;
+        }
+
+/*
         if ($downloadUrl === null) {
             IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine passende APK in psa_apk/psa_car_controller über die letzten 8 Releases.");
             // Optional: Fallback auf eine manuell hinterlegte APK-URL (Property) oder APKMirror
@@ -407,7 +430,7 @@ class PSAVehicle extends IPSModule
         if (!$this->downloadFile($downloadUrl, $apkPath, 60)) {
             IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: APK-Download fehlgeschlagen: {$downloadUrl}");
             return false;
-        }
+        }*/
 
         // 6) PFX aus APK extrahieren → PEMs gewinnen (nutzt deine bestehende Routine)
         try {
@@ -607,6 +630,132 @@ class PSAVehicle extends IPSModule
             }
         }
         return null;
+    }
+
+    /**
+     * Brand → Dateiname der .apk.bz2 im Repo flobz/psa_apk (main).
+     * Beispiel: Peugeot → mypeugeot.apk.bz2
+     */
+    private function brandToPsaApkBz2(string $brand): ?string
+    {
+        $map = [
+            'Peugeot'  => 'mypeugeot.apk.bz2',
+            'Citroen'  => 'mycitroen.apk.bz2',
+            'DS'       => 'myds.apk.bz2',
+            'Opel'     => 'myopel.apk.bz2',
+            'Vauxhall' => 'myvauxhall.apk.bz2',
+        ];
+        return $map[$brand] ?? null;
+    }
+
+    /**
+     * Versucht die Brand-APK als .apk.bz2 direkt aus flobz/psa_apk@main (raw) zu laden
+     * und dekomprimiert nach <cacheDir>/<brand>.apk. Liefert Pfad zur .apk oder null.
+     * Hinweis: flobz/psa_apk enthält z. T. genau diese Dateien im main-Branch. [2](https://github.com/flobz/psa_apk)
+     */
+    private function tryDownloadPsaApkFromRepoRaw(string $brand, string $cacheDir): ?string
+    {
+        $bz2 = $this->brandToPsaApkBz2($brand);
+        if ($bz2 === null) {
+            IPS_LogMessage("PSAVehicle", "RawFallback: Keine .apk.bz2-Zuordnung für Marke {$brand}.");
+            return null;
+        }
+
+        // Raw-URL (main-Branch) – wir verwenden raw.githubusercontent.com
+        $rawUrl = "https://raw.githubusercontent.com/flobz/psa_apk/main/{$bz2}";
+        $tmpBz2 = $cacheDir . "/" . $bz2;
+        $outApk = $cacheDir . "/" . strtolower($brand) . ".apk";
+
+        IPS_LogMessage("PSAVehicle", "RawFallback: Lade {$bz2} aus psa_apk@main ...");
+
+        if (!$this->downloadFile($rawUrl, $tmpBz2, 60)) {
+            IPS_LogMessage("PSAVehicle", "RawFallback: Download fehlgeschlagen (kein Zugriff oder Datei existiert nicht?): {$rawUrl}");
+            @unlink($tmpBz2);
+            return null;
+        }
+
+        // Dekomprimieren: bevorzugt stream-basiert → bzopen/bzread; sonst bzdecompress
+        $ok = $this->decompressBz2File($tmpBz2, $outApk);
+        @unlink($tmpBz2);
+        if (!$ok) {
+            IPS_LogMessage("PSAVehicle", "RawFallback: Dekomprimierung fehlgeschlagen: {$bz2}");
+            @unlink($outApk);
+            return null;
+        }
+
+        // Grundcheck .apk – mind. ~1 MB groß
+        $size = @filesize($outApk);
+        if ($size === false || $size < 1024 * 1024) {
+            IPS_LogMessage("PSAVehicle", "RawFallback: APK verdächtig klein ({$size} Bytes). Abbruch.");
+            @unlink($outApk);
+            return null;
+        }
+
+        IPS_LogMessage("PSAVehicle", "RawFallback: APK bereit: {$outApk} (".number_format($size)." Bytes)");
+        return $outApk;
+    }
+
+    /**
+     * BZip2-Dekompression: stream-basiert mit bzopen/bzread, Fallback auf bzdecompress.
+     */
+    private function decompressBz2File(string $srcBz2, string $dstApk): bool
+    {
+        // Ziel anlegen
+        $out = @fopen($dstApk, 'wb');
+        if (!$out) {
+            IPS_LogMessage("PSAVehicle", "decompressBz2File: Ziel nicht schreibbar: {$dstApk}");
+            return false;
+        }
+
+        // Variante A: bzopen verfügbar → chunked lesen
+        if (function_exists('bzopen') && function_exists('bzread') && function_exists('bzclose')) {
+            $bz = @bzopen($srcBz2, 'r');
+            if (!$bz) {
+                fclose($out);
+                IPS_LogMessage("PSAVehicle", "decompressBz2File: bzopen() fehlgeschlagen: {$srcBz2}");
+                return false;
+            }
+            while (!feof($bz)) {
+                $data = @bzread($bz, 8192);
+                if ($data === false) {
+                    @bzclose($bz);
+                    fclose($out);
+                    IPS_LogMessage("PSAVehicle", "decompressBz2File: bzread() Fehler.");
+                    return false;
+                }
+                if ($data !== '') {
+                    fwrite($out, $data);
+                }
+            }
+            @bzclose($bz);
+            fclose($out);
+            @chmod($dstApk, 0600);
+            return true;
+        }
+
+        // Variante B: bzdecompress (lädt gesamte Datei in den Speicher)
+        if (function_exists('bzdecompress')) {
+            $buf = @file_get_contents($srcBz2);
+            if ($buf === false) {
+                fclose($out);
+                IPS_LogMessage("PSAVehicle", "decompressBz2File: file_get_contents() fehlgeschlagen: {$srcBz2}");
+                return false;
+            }
+            $apk = @bzdecompress($buf);
+            if (!is_string($apk)) {
+                fclose($out);
+                IPS_LogMessage("PSAVehicle", "decompressBz2File: bzdecompress() fehlgeschlagen.");
+                return false;
+            }
+            fwrite($out, $apk);
+            fclose($out);
+            @chmod($dstApk, 0600);
+            return true;
+        }
+
+        fclose($out);
+        IPS_LogMessage("PSAVehicle", "decompressBz2File: Keine BZip2-Funktion (bzopen/bzdecompress) verfügbar.");
+        return false;
     }
 
     /**
