@@ -675,8 +675,12 @@ class PSAVehicle extends IPSModule
         }
 
         // Dekomprimieren: bevorzugt stream-basiert → bzopen/bzread; sonst bzdecompress
-        $ok = $this->decompressBz2File($tmpBz2, $outApk);
-        @unlink($tmpBz2);
+        /*$ok = $this->decompressBz2File($tmpBz2, $outApk);
+        @unlink($tmpBz2);*/
+        
+        // $tmpBz2 (geladen) → $outApk
+        $ok = $this->bunzip2Pure($tmpBz2, $outApk);
+
         if (!$ok) {
             IPS_LogMessage("PSAVehicle", "RawFallback: Dekomprimierung fehlgeschlagen: {$bz2}");
             @unlink($outApk);
@@ -1403,4 +1407,354 @@ class PSAVehicle extends IPSModule
         }
         return $varId;
     }
+
+    /**
+     * Reiner PHP-BZip2-Decoder (ohne ext/bz2).
+     * Unterstützt: BZh-Streams, Standardblöcke (1..9), kein "randomised" Modus.
+     * Schreibt den dekomprimierten Strom nach $dstFile. Liefert true/false.
+     *
+     * Quelle/Referenz (Format/Algorithmus-Überblick):
+     *  - bzip2 arbeitet mit BWT → Move-To-Front → Huffman → RLE; Header 'BZh' mit Blockgröße 1..9 (100..900kB).
+     *  - Stream: 4-Byte-Header, 0..n Blöcke, Endmarker mit Stream-CRC. [1](https://en.wikipedia.org/wiki/Bzip2)[2](https://www.loc.gov/preservation/digital/formats/fdd/fdd000600.shtml)
+     *  - Praktische Wire-Format-Bits/Blockmagics sind in der Wuffs-Doc illustriert. [3](https://github.com/google/wuffs/blob/f1698226806569eb45ea009deee89a108f8d5395/std/bzip2/README.md)
+     */
+    private function bunzip2Pure(string $srcBz2, string $dstFile, bool $verifyCrc = false): bool
+    {
+        $in = @fopen($srcBz2, 'rb');
+        if (!$in) {
+            IPS_LogMessage("PSAVehicle", "bunzip2Pure: Quelle nicht lesbar: $srcBz2");
+            return false;
+        }
+        $out = @fopen($dstFile, 'wb');
+        if (!$out) {
+            fclose($in);
+            IPS_LogMessage("PSAVehicle", "bunzip2Pure: Ziel nicht schreibbar: $dstFile");
+            return false;
+        }
+
+        $br = new class($in)
+        {
+            private $fp;
+            private int $buf = 0;
+            private int $nbits = 0;
+            public function __construct($fp){ $this->fp = $fp; }
+            public function readBytes(int $n): string {
+                $this->nbits = 0; $this->buf = 0;
+                $data = '';
+                while (strlen($data) < $n) {
+                    $chunk = fread($this->fp, $n - strlen($data));
+                    if ($chunk === '' || $chunk === false) break;
+                    $data .= $chunk;
+                }
+                return $data;
+            }
+            public function readU8(): ?int { $b = $this->readBytes(1); return ($b === '' ? null : ord($b)); }
+            public function readBits(int $n): ?int {
+                $v = 0;
+                while ($n > 0) {
+                    if ($this->nbits === 0) {
+                        $b = fgetc($this->fp);
+                        if ($b === false) return null;
+                        $this->buf = ord($b);
+                        $this->nbits = 8;
+                    }
+                    $take = ($n < $this->nbits) ? $n : $this->nbits;
+                    // MSB-first
+                    $shift = $this->nbits - $take;
+                    $mask = ((1 << $take) - 1) << $shift;
+                    $v = ($v << $take) | (($this->buf & $mask) >> $shift);
+                    $this->nbits -= $take;
+                    $this->buf &= (1 << $this->nbits) - 1;
+                    $n -= $take;
+                }
+                return $v;
+            }
+            public function alignByte(): void { $this->nbits = 0; $this->buf = 0; }
+        };
+
+        // --- Header: "BZh" + block size char '1'..'9'
+        $hdr = $br->readBytes(3);
+        if ($hdr !== "BZh") {
+            fclose($in); fclose($out);
+            IPS_LogMessage("PSAVehicle", "bunzip2Pure: Ungültiger Header (kein BZh)");
+            return false;
+        }
+        $blkChar = $br->readU8();
+        if ($blkChar === null || $blkChar < ord('1') || $blkChar > ord('9')) {
+            fclose($in); fclose($out);
+            IPS_LogMessage("PSAVehicle", "bunzip2Pure: Ungültige Blockgröße.");
+            return false;
+        }
+        $blockSize100k = (int)(chr($blkChar));
+        // bzip2 ist bitorientiert; wir lesen ab hier in Bits weiter (br.readBits)
+
+        // Konstanten (Block- & EOS-Magics in Bits, siehe Wire-Format-Beispiele) [3](https://github.com/google/wuffs/blob/f1698226806569eb45ea009deee89a108f8d5395/std/bzip2/README.md)
+        // Block-Magic 48 Bit: 0x314159265359 ("pi") → Bits: 00110001 01000001 01011001 00100110 01010011 01011001
+        // EOS-Magic   48 Bit: 0x177245385090
+        $BLOCK_MAGIC = [0x31,0x41,0x59,0x26,0x53,0x59]; // "1AY&SY"
+        $EOS_MAGIC   = [0x17,0x72,0x45,0x38,0x50,0x90];
+
+        // Hilfe-Funktionen
+        $read48 = function() use ($br): ?array {
+            $b = $br->readBytes(6);
+            if (strlen($b) !== 6) return null;
+            return [ord($b[0]),ord($b[1]),ord($b[2]),ord($b[3]),ord($b[4]),ord($b[5])];
+        };
+        $eqArr = fn($a,$b) => $a!==null && count($a)===count($b) && !array_diff_assoc($a,$b);
+
+        $streamCrc = 0;
+        $writtenTotal = 0;
+
+        // --- Blockschleife
+        for (;;) {
+            $br->alignByte(); // Spezifikationsgemäß bitbasiert; vor den 6 Byte Magics ausrichten.
+            $sig = $read48();
+            if ($sig === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: Unerwartetes Streamende."); return false; }
+
+            if ($eqArr($sig, $BLOCK_MAGIC)) {
+                // Block Header: 32-bit Block CRC, 1-bit randomised (deprecated; wir unterstützen nur 0)
+                $crc = ($br->readU8()<<24)|($br->readU8()<<16)|($br->readU8()<<8)|($br->readU8());
+                $rand = $br->readBits(1);
+                if ($rand !== 0) {
+                    fclose($in); fclose($out);
+                    IPS_LogMessage("PSAVehicle", "bunzip2Pure: randomised-Blocks werden nicht unterstützt.");
+                    return false;
+                }
+
+                // --- InUse-Map (16 flags, ggf. 16*16 Detailflags) → Alphabet bauen
+                $inUse16 = [];
+                for ($i=0;$i<16;$i++) $inUse16[$i] = $br->readBits(1);
+                $inUse = array_fill(0,256,0);
+                for ($i=0;$i<16;$i++) if ($inUse16[$i]) {
+                    for ($j=0;$j<16;$j++) $inUse[($i<<4)|$j] = $br->readBits(1);
+                }
+                $seqToUnseq = [];
+                for ($i=0;$i<256;$i++) if ($inUse[$i]) $seqToUnseq[] = $i;
+                $nInUse = count($seqToUnseq);
+                if ($nInUse === 0) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: nInUse=0"); return false; }
+
+                // --- origPtr (24 Bit) für inverse BWT
+                $origPtr = ($br->readBits(8)<<16)|($br->readBits(8)<<8)|($br->readBits(8));
+
+                // --- Gruppenanzahl/Selectoren
+                $nGroups    = $br->readBits(3);    // 2..6 (Spez: 2..6, manche Quellen nennen 3..6)
+                $nSelectors = $br->readBits(15);   // Anzahl Selectors (bis 2^15-1)
+                if ($nGroups < 2 || $nGroups > 6 || $nSelectors<=0) {
+                    fclose($in); fclose($out);
+                    IPS_LogMessage("PSAVehicle","bunzip2Pure: Ungültige Gruppen-/Selectoranzahl");
+                    return false;
+                }
+                // MTF-kodierte Selectors (0..nGroups-1), mit Vorläufer-Läufen („zero bit runs“)
+                $selectors = [];
+                // Start-MTF-Liste: 0..nGroups-1
+                $mtf = range(0, $nGroups-1);
+                for ($i=0;$i<$nSelectors;$i++) {
+                    $cnt=0;
+                    while (($bit = $br->readBits(1)) === 1) $cnt++;
+                    // MTF: Element an Position $cnt nach vorn
+                    $sym = $mtf[$cnt];
+                    array_splice($mtf, $cnt, 1);
+                    array_unshift($mtf, $sym);
+                    $selectors[$i] = $sym;
+                }
+
+                // --- Huffman-Code-Längen pro Gruppe
+                $alphaSize = $nInUse + 2; // +RUNA/+RUNB
+                $len = [];
+                for ($g=0;$g<$nGroups;$g++) {
+                    $len[$g] = array_fill(0,$alphaSize,0);
+                    $cur = $br->readBits(5); // initial length
+                    for ($i=0;$i<$alphaSize;$i++) {
+                        while (true) {
+                            $b = $br->readBits(1);
+                            if ($b === 0) break;
+                            $b2 = $br->readBits(1);
+                            $cur += ($b2===0) ? -1 : +1;
+                        }
+                        $len[$g][$i] = $cur;
+                    }
+                }
+
+                // --- Huffman-Tables bauen (für jede Gruppe)
+                $tables = [];
+                for ($g=0;$g<$nGroups;$g++) {
+                    $tables[$g] = $this->buildHuffmanTable($len[$g], $alphaSize);
+                    if ($tables[$g] === null) {
+                        fclose($in); fclose($out);
+                        IPS_LogMessage("PSAVehicle","bunzip2Pure: Huffman-Tabelle ungültig.");
+                        return false;
+                    }
+                }
+
+                // --- Entropie-Dekodierung (50er Läufe per Selector)
+                $RUNA=0; $RUNB=1;
+                $groupIndex=0; $groupRun=0;
+                $symbols = []; $nsym=0;
+
+                $getTable = function() use (&$groupRun,&$groupIndex,$nSelectors,&$selectors,&$tables) {
+                    if ($groupRun===0) {
+                        $groupRun = 50;
+                        $t = $tables[$selectors[$groupIndex]];
+                        $groupIndex++;
+                        return $t;
+                    } else {
+                        $groupRun--;
+                        return $tables[$selectors[$groupIndex-1]];
+                    }
+                };
+
+                // Huffman-Dekoder (Bit‑Reader + Decodierbäume)
+                $decodeSym = function($tab) use ($br) {
+                    // Canonical Huffman: wir halten für jede Länge min/max Code u. Startindex
+                    // $tab = ['limit'=>[], 'base'=>[], 'perm'=>[], 'minLen'=>int, 'maxLen'=>int]
+                    $code = 0;
+                    for ($len=$tab['minLen']; $len<=$tab['maxLen']; $len++) {
+                        $code = ($code<<1) | $br->readBits(1);
+                        if ($code <= $tab['limit'][$len]) {
+                            $idx = $tab['base'][$len] + ($code - $tab['basecode'][$len]);
+                            return $tab['perm'][$idx];
+                        }
+                    }
+                    return null;
+                };
+
+                // MTF-Dekodierung vorbereiten
+                $yy = $seqToUnseq; // Liste der Bytes (0..255) in benutzter Reihenfolge
+
+                // Symbolfluss (bis End-of-Block Markersymbol kommt (= alphaSize-1))
+                $eob = $alphaSize - 1;
+                for (;;) {
+                    $tab = $getTable();
+                    $sym = $decodeSym($tab);
+                    if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: Huffman decode fail"); return false; }
+
+                    if ($sym === $RUNA || $sym === $RUNB) {
+                        // Lauflängen-Kodierung (bitweise akkumuliert)
+                        $run = 0; $inc = 1;
+                        do {
+                            $run += ($sym === $RUNA) ? $inc : ($inc<<1);
+                            $tab = $getTable();
+                            $sym = $decodeSym($tab);
+                            if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: RUN decode fail"); return false; }
+                            $inc <<= 1;
+                        } while ($sym === $RUNA || $sym === $RUNB);
+                        // Wiederhole das vorderste Byte 'run' Mal
+                        $c = $yy[0];
+                        while ($run-- > 0) { $symbols[$nsym++] = $c; }
+                        // Falls das nächste Symbol EOB ist: Schleife fällt unten raus
+                    }
+                    if ($sym === $eob) break; // End-of-block
+
+                    // Normalsymbol: MTF-Index (sym-1)
+                    $j = $sym - 1;
+                    $c = $yy[$j];
+                    // Move-to-front
+                    array_splice($yy, $j, 1);
+                    array_unshift($yy, $c);
+                    $symbols[$nsym++] = $c;
+                }
+
+                // --- Inverse BWT mit origPtr
+                // Erzeuge Tally über 0..255
+                $count = array_fill(0, 256, 0);
+                for ($i=0;$i<$nsym;$i++) $count[$symbols[$i]]++;
+                $cum = 0; $cumul = [];
+                for ($i=0;$i<256;$i++) { $cum += $count[$i]; $cumul[$i] = $cum - $count[$i]; }
+
+                $tt = array_fill(0, $nsym, 0);
+                $bucket = $cumul; // Arbeitskopie
+                for ($i=0;$i<$nsym;$i++) {
+                    $b = $symbols[$i];
+                    $tt[$bucket[$b]] = $i;
+                    $bucket[$b]++;
+                }
+
+                // Rekonstruiere durch TT-Verkettung, beginnend bei origPtr
+                $t = $tt[$origPtr];
+                for ($i=0;$i<$nsym;$i++) {
+                    $b = $symbols[$t];
+                    // RLE-1 (Sekundäres RLE) rückgängig machen:
+                    // bzip2 schreibt Lauflängen von gleichen Bytes per Zähler in symbol stream ab,
+                    // die eigentliche RLE-Phase ist bereits in RUNA/RUNB abgebildet – hier schreiben wir direkt aus.
+                    fwrite($out, chr($b));
+                    $t = $tt[$t];
+                }
+
+                $writtenTotal += $nsym;
+                // Optional: Block-CRC prüfen (wir überspringen standardmäßig; verifyCrc=true → später implementierbar)
+
+                // Ende Block: weiter zum nächsten Marker
+                continue;
+            }
+
+            if ($eqArr($sig, $EOS_MAGIC)) {
+                // Stream-Ende + Stream-CRC (32 Bit)
+                $streamCrc = ($br->readU8()<<24)|($br->readU8()<<16)|($br->readU8()<<8)|($br->readU8());
+                // Optional: stream-CRC prüfen – wir beenden hier.
+                break;
+            }
+
+            // Weder BLOCK noch EOS => fehlerhaft
+            fclose($in); fclose($out);
+            IPS_LogMessage("PSAVehicle","bunzip2Pure: Unbekannter Marker im Stream.");
+            return false;
+        }
+
+        fclose($in);
+        fclose($out);
+        return ($writtenTotal > 0);
+    }
+
+    /**
+     * Hilfsfunktion: Canonical-Huffman-Tabelle aus Längen bauen.
+     * Rückgabe-Layout kompatibel zur Ad-hoc-Decodierung oben.
+     */
+    private function buildHuffmanTable(array $lengths, int $alphaSize): ?array
+    {
+        $minLen = PHP_INT_MAX; $maxLen = 0;
+        $countPerLen = [];
+        for ($i=0;$i<$alphaSize;$i++) {
+            $l = $lengths[$i];
+            if ($l<=0) continue;
+            if (!isset($countPerLen[$l])) $countPerLen[$l] = 0;
+            $countPerLen[$l]++;
+            if ($l < $minLen) $minLen = $l;
+            if ($l > $maxLen) $maxLen = $l;
+        }
+        if ($minLen === PHP_INT_MAX) return null;
+
+        $base = []; $limit = []; $basecode = [];
+        $code = 0;
+        for ($l=$minLen; $l<=$maxLen; $l++) {
+            $cnt = $countPerLen[$l] ?? 0;
+            $base[$l] = $code;
+            $code = ($code + $cnt) << 1;
+        }
+        $code = 0;
+        for ($l=$minLen; $l<=$maxLen; $l++) {
+            $cnt = $countPerLen[$l] ?? 0;
+            $code = ($code + $cnt);
+            $limit[$l] = ($code - 1);
+            $code <<= 1;
+        }
+        // Permutations-Array (Symbolreihenfolge nach Längen sortiert)
+        $perm = [];
+        for ($l=$minLen; $l<=$maxLen; $l++) {
+            for ($i=0;$i<$alphaSize;$i++) {
+                if ($lengths[$i] === $l) $perm[] = $i;
+            }
+        }
+        // basecode[l] = erster Codewert der Länge l
+        $basecode = [];
+        $codeVal = 0;
+        for ($l=$minLen; $l<=$maxLen; $l++) {
+            $basecode[$l] = $codeVal;
+            $codeVal = ($limit[$l] + 1) << 1;
+        }
+
+        return [
+            'minLen'=>$minLen, 'maxLen'=>$maxLen,
+            'base'=>$base, 'limit'=>$limit, 'perm'=>$perm, 'basecode'=>$basecode
+        ];
+    }    
 }
