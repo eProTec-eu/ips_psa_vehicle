@@ -1521,27 +1521,54 @@ class PSAVehicle extends IPSModule
                     return false;
                 }
 
-                // --- InUse-Map (16 flags, ggf. 16*16 Detailflags) → Alphabet bauen
-                $inUse16 = [];
-                for ($i=0;$i<16;$i++) $inUse16[$i] = $br->readBits(1);
-                $inUse = array_fill(0,256,0);
-                for ($i=0;$i<16;$i++) if ($inUse16[$i]) {
-                    for ($j=0;$j<16;$j++) $inUse[($i<<4)|$j] = $br->readBits(1);
-                }
-                $seqToUnseq = [];
-                for ($i=0;$i<256;$i++) if ($inUse[$i]) $seqToUnseq[] = $i;
-                $nInUse = count($seqToUnseq);
-                if ($nInUse === 0) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: nInUse=0"); return false; }
+                // --- Block Header ist gelesen: block CRC (32 Bit) und randomised Flag (1 Bit)
+                // RICHTIGE REIHENFOLGE: origPtr (24 Bit) → InUse-Map → Gruppen/Selectoren
 
-                // --- origPtr (24 Bit) für inverse BWT
-                $origPtr = ($br->readBits(8)<<16)|($br->readBits(8)<<8)|($br->readBits(8));
-
-                // --- Gruppenanzahl/Selectoren
-                $nGroups    = $br->readBits(3);    // 2..6 (Spez: 2..6, manche Quellen nennen 3..6)
-                $nSelectors = $br->readBits(15);   // Anzahl Selectors (bis 2^15-1)
-                if ($nGroups < 2 || $nGroups > 6 || $nSelectors<=0) {
+                // 1) origPtr (24 Bit) – Position für inverse BWT
+                $origPtr = ($br->readBits(8) << 16) | ($br->readBits(8) << 8) | ($br->readBits(8));
+                if ($origPtr === null || $origPtr < 0) {
                     fclose($in); fclose($out);
-                    IPS_LogMessage("PSAVehicle","bunzip2Pure: Ungültige Gruppen-/Selectoranzahl");
+                    IPS_LogMessage("PSAVehicle", "bunzip2Pure: origPtr ungültig.");
+                    return false;
+                }
+
+                // 2) InUse-Map (16 Flags + ggf. 16×16 Detailbits) → Alphabet aufbauen
+                $inUse16 = [];
+                for ($i = 0; $i < 16; $i++) $inUse16[$i] = $br->readBits(1);
+
+                $inUse = array_fill(0, 256, 0);
+                for ($i = 0; $i < 16; $i++) {
+                    if ($inUse16[$i]) {
+                        for ($j = 0; $j < 16; $j++) {
+                            $bit = $br->readBits(1);
+                            if ($bit === null) {
+                                fclose($in); fclose($out);
+                                IPS_LogMessage("PSAVehicle", "bunzip2Pure: InUse-Map unvollständig.");
+                                return false;
+                            }
+                            $inUse[($i << 4) | $j] = $bit;
+                        }
+                    }
+                }
+
+                $seqToUnseq = [];
+                for ($i = 0; $i < 256; $i++) {
+                    if ($inUse[$i]) $seqToUnseq[] = $i;
+                }
+                $nInUse = count($seqToUnseq);
+                if ($nInUse === 0) {
+                    fclose($in); fclose($out);
+                    IPS_LogMessage("PSAVehicle", "bunzip2Pure: nInUse=0.");
+                    return false;
+                }
+
+                // 3) Gruppen/Selectoren
+                $nGroups    = $br->readBits(3);    // 2..6
+                $nSelectors = $br->readBits(15);   // typ. bis ~18002 (ceil(nSymbols/50))
+                if ($nGroups === null || $nSelectors === null ||
+                    $nGroups < 2 || $nGroups > 6 || $nSelectors <= 0 || $nSelectors > 20000) {
+                    fclose($in); fclose($out);
+                    IPS_LogMessage("PSAVehicle", "bunzip2Pure: Ungültige Gruppen-/Selectoranzahl (g={$nGroups}, s={$nSelectors}).");
                     return false;
                 }
                 // MTF-kodierte Selectors (0..nGroups-1), mit Vorläufer-Läufen („zero bit runs“)
