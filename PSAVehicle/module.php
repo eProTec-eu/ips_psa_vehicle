@@ -381,9 +381,11 @@ class PSAVehicle extends IPSModule
         }*/
 
         // 4) Download-URL über beide Repos auflösen
-        $downloadUrl = $this->resolveFlobzApkDownloadUrl($apkFileName);
+        // neu (durchsucht mehrere Releases in beiden Repos):
+        $downloadUrl = $this->resolveFlobzApkDownloadUrlDeep($apkFileName, 8);
         if ($downloadUrl === null) {
-            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine passende APK in psa_apk oder psa_car_controller gefunden.");
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine passende APK in psa_apk/psa_car_controller über die letzten 8 Releases.");
+            // Optional: Fallback auf eine manuell hinterlegte APK-URL (Property) oder APKMirror
             return false;
         }
 
@@ -516,6 +518,91 @@ class PSAVehicle extends IPSModule
         }
         $json = json_decode($resp, true);
         return is_array($json) ? $json : null;
+    }
+
+    /**
+     * Liest die letzten N Releases eines Repos und liefert das gefundene APK-Asset
+     * (browser_download_url) für den gewünschten Dateinamen zurück.
+     */
+    private function githubFindApkAcrossReleases(string $owner, string $repo, string $brandApkFilename, int $maxReleases = 8): ?string
+    {
+        $headers = [
+            'User-Agent: PSAVehicle/1.0 (+https://github.com/flobz/psa_car_controller)',
+            'Accept: application/vnd.github+json'
+        ];
+        $token = trim($this->ReadPropertyString("GithubToken"));
+        if ($token !== "") {
+            $headers[] = "Authorization: Bearer {$token}";
+        }
+
+        // /releases: Seite 1 reicht in der Regel
+        $url = "https://api.github.com/repos/{$owner}/{$repo}/releases?per_page={$maxReleases}&page=1";
+        $ch  = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 25,
+            CURLOPT_HTTPHEADER     => $headers
+        ]);
+        $resp = curl_exec($ch);
+        if ($resp === false) {
+            IPS_LogMessage("PSAVehicle", "githubFindApkAcrossReleases: cURL Fehler: " . curl_error($ch));
+            curl_close($ch);
+            return null;
+        }
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($code === 403) {
+            IPS_LogMessage("PSAVehicle", "githubFindApkAcrossReleases: HTTP 403 (Rate-Limit?). Optional GithubToken setzen.");
+            return null;
+        }
+        if ($code !== 200) {
+            IPS_LogMessage("PSAVehicle", "githubFindApkAcrossReleases: HTTP {$code} → {$resp}");
+            return null;
+        }
+
+        $releases = json_decode($resp, true);
+        if (!is_array($releases)) return null;
+
+        foreach ($releases as $rel) {
+            if (empty($rel['assets']) || !is_array($rel['assets'])) continue;
+            foreach ($rel['assets'] as $asset) {
+                $name = $asset['name'] ?? '';
+                $url  = $asset['browser_download_url'] ?? '';
+                // 1) exakter Treffer (strcasecmp)
+                if ($name !== '' && strcasecmp($name, $brandApkFilename) === 0 && $url !== '') {
+                    return $url;
+                }
+                // 2) Heuristik: manchmal anders benannt (z.B. brand-<ver>.apk)
+                if ($name !== '' && $url !== '') {
+                    $want = strtolower(pathinfo($brandApkFilename, PATHINFO_FILENAME)); // z.B. 'opel'
+                    if (preg_match('/\b' . preg_quote($want, '/') . '\b.*\\.apk$/i', strtolower($name))) {
+                        IPS_LogMessage("PSAVehicle", "Heuristik-Treffer: {$owner}/{$repo} → {$name}");
+                        return $url;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Sucht <brand>.apk zuerst in flobz/psa_apk, dann in flobz/psa_car_controller
+     * und durchsucht dabei jeweils die letzten N Releases.
+     */
+    private function resolveFlobzApkDownloadUrlDeep(string $brandApkFilename, int $maxReleases = 8): ?string
+    {
+        $repos = [
+            ['owner' => 'flobz', 'repo' => 'psa_apk'],
+            ['owner' => 'flobz', 'repo' => 'psa_car_controller']
+        ];
+        foreach ($repos as $r) {
+            $url = $this->githubFindApkAcrossReleases($r['owner'], $r['repo'], $brandApkFilename, $maxReleases);
+            if ($url !== null) {
+                IPS_LogMessage("PSAVehicle", "APK in {$r['owner']}/{$r['repo']} gefunden: {$brandApkFilename}");
+                return $url;
+            }
+        }
+        return null;
     }
 
     /**
