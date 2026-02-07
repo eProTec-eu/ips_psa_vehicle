@@ -547,13 +547,6 @@ class PSAVehicle extends IPSModule
         return $found;
     }
 
-    // Beispielnutzung:
-    $paths = $this->findPfxPathsInApk('/path/to/BrandAPK.apk');
-    if (!empty($paths)) {
-        // Häufigster Fall laut flobz: assets/MWPMYMA1.pfx
-        // $paths[0] enthält dann z.B. "assets/MWPMYMA1.pfx"
-    }
-
     /** GitHub: neuestes Release (JSON) holen – optional mit Token zur Erhöhung des Rate-Limits. */
     private function githubGetLatestRelease(string $owner, string $repo): ?array
     {
