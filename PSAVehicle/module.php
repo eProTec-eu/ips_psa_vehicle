@@ -239,11 +239,6 @@ class PSAVehicle extends IPSModule
             "actions" => [              
                 [
                 "type"   => "Button",
-                "label"  => "Zertifikate von flobz holen",
-                "onClick"=> 'PSAVehicle_FetchFlobzCerts($id);'
-                ],
-                [
-                "type"   => "Button",
                 "label"  => "PSA Code abfragen",
                 "onClick"=> 'PSAVehicle_RequestPsaCode($id);'
                 ],
@@ -383,10 +378,17 @@ class PSAVehicle extends IPSModule
             return false;
         }
 
-        // 4) GitHub Releases: neueste Version abfragen & Asset-URL (browser_download_url) für <brand>.apk finden
+        /*/ 4) GitHub Releases: neueste Version abfragen & Asset-URL (browser_download_url) für <brand>.apk finden
         $release = $this->githubGetLatestRelease("flobz", "psa_car_controller");
         if ($release === null || empty($release['assets'])) {
             IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine Release-Assets gefunden.");
+            return false;
+        }*/
+
+        // 4) Download-URL über beide Repos auflösen
+        $downloadUrl = $this->resolveFlobzApkDownloadUrl($apkFileName);
+        if ($downloadUrl === null) {
+            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine passende APK in psa_apk oder psa_car_controller gefunden.");
             return false;
         }
 
@@ -419,6 +421,77 @@ class PSAVehicle extends IPSModule
             return false;
         }
 
+    /**
+     * Versucht in Reihenfolge die Releases/Assets zu lesen:
+     *   1) flobz/psa_apk      (primär)
+     *   2) flobz/psa_car_controller (Fallback)
+     * und liefert die browser_download_url für <brand>.apk zurück.
+     */
+    private function resolveFlobzApkDownloadUrl(string $brandApkFilename): ?string
+    {
+        $candidates = [
+            ['owner' => 'flobz', 'repo' => 'psa_apk'],
+            ['owner' => 'flobz', 'repo' => 'psa_car_controller']
+        ];
+
+        foreach ($candidates as $c) {
+            $rel = $this->githubGetLatestRelease($c['owner'], $c['repo']);
+            if (!$rel || empty($rel['assets'])) {
+                IPS_LogMessage("PSAVehicle", "Keine Assets in {$c['owner']}/{$c['repo']} gefunden oder Release nicht abrufbar.");
+                continue;
+            }
+            foreach ($rel['assets'] as $asset) {
+                $name = $asset['name'] ?? '';
+                $url  = $asset['browser_download_url'] ?? '';
+                if ($name !== '' && $url !== '' && strcasecmp($name, $brandApkFilename) === 0) {
+                    IPS_LogMessage("PSAVehicle", "APK-Asset gefunden in {$c['owner']}/{$c['repo']}: {$name}");
+                    return $url;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** GitHub: neuestes Release lesen (mit optionalem Token); gibt JSON-Array zurück oder null. */
+    private function githubGetLatestRelease(string $owner, string $repo): ?array
+    {
+        $url = "https://api.github.com/repos/{$owner}/{$repo}/releases/latest";
+        $headers = [
+            'User-Agent: PSAVehicle/1.0 (+https://github.com/flobz/psa_car_controller)',
+            'Accept: application/vnd.github+json'
+        ];
+        $token = trim($this->ReadPropertyString("GithubToken"));
+        if ($token !== "") {
+            $headers[] = "Authorization: Bearer {$token}";
+        }
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 20,
+            CURLOPT_HTTPHEADER     => $headers
+        ]);
+        $resp = curl_exec($ch);
+        if ($resp === false) {
+            IPS_LogMessage("PSAVehicle", "githubGetLatestRelease: cURL Fehler: " . curl_error($ch));
+            curl_close($ch);
+            return null;
+        }
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($code === 403) {
+            IPS_LogMessage("PSAVehicle", "githubGetLatestRelease: HTTP 403 (Rate-Limit?). Optional GithubToken setzen.");
+            return null;
+        }
+        if ($code !== 200) {
+            IPS_LogMessage("PSAVehicle", "githubGetLatestRelease: HTTP {$code} → {$resp}");
+            return null;
+        }
+        $json = json_decode($resp, true);
+        return is_array($json) ? $json : null;
+    }
+
         // 7) PEM-Dateien sicher schreiben
         $certPemPath = $cacheDir . "/client_cert.pem";
         $keyPemPath  = $cacheDir . "/client_key.pem";
@@ -448,6 +521,37 @@ class PSAVehicle extends IPSModule
 
         IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: OK – Zertifikate aktualisiert aus {$apkFileName}");
         return true;
+    }
+
+    /**
+     * Findet PFX-Datei(en) in einer APK und liefert relative Pfade zurück (z. B. assets/MWPMYMA1.pfx).
+     * @return string[] Liste relativer Pfade im APK
+     */
+    private function findPfxPathsInApk(string $apkPath): array
+    {
+        $found = [];
+        $zip = new ZipArchive();
+        if ($zip->open($apkPath) !== true) {
+            throw new RuntimeException("APK konnte nicht geöffnet werden: $apkPath");
+        }
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $stat = $zip->statIndex($i);
+            if (!$stat || !isset($stat['name'])) continue;
+            $name = $stat['name'];
+            // Suche nach .pfx im assets-Ordner
+            if (stripos($name, 'assets/') === 0 && preg_match('/\\.pfx$/i', $name)) {
+                $found[] = $name;
+            }
+        }
+        $zip->close();
+        return $found;
+    }
+
+    // Beispielnutzung:
+    $paths = $this->findPfxPathsInApk('/path/to/BrandAPK.apk');
+    if (!empty($paths)) {
+        // Häufigster Fall laut flobz: assets/MWPMYMA1.pfx
+        // $paths[0] enthält dann z.B. "assets/MWPMYMA1.pfx"
     }
 
     /** GitHub: neuestes Release (JSON) holen – optional mit Token zur Erhöhung des Rate-Limits. */
