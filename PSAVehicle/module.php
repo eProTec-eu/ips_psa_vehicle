@@ -521,8 +521,8 @@ class PSAVehicle extends IPSModule
     }
 
     /**
-     * Liest die letzten N Releases eines Repos und liefert das gefundene APK-Asset
-     * (browser_download_url) für den gewünschten Dateinamen zurück.
+     * Liest die letzten N Releases eines Repos und liefert die browser_download_url
+     * für eine Brand-APK (z. B. "opel.apk"). Inkl. Heuristik (brand-<ver>.apk).
      */
     private function githubFindApkAcrossReleases(string $owner, string $repo, string $brandApkFilename, int $maxReleases = 8): ?string
     {
@@ -535,7 +535,6 @@ class PSAVehicle extends IPSModule
             $headers[] = "Authorization: Bearer {$token}";
         }
 
-        // /releases: Seite 1 reicht in der Regel
         $url = "https://api.github.com/repos/{$owner}/{$repo}/releases?per_page={$maxReleases}&page=1";
         $ch  = curl_init($url);
         curl_setopt_array($ch, [
@@ -551,8 +550,9 @@ class PSAVehicle extends IPSModule
         }
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+
         if ($code === 403) {
-            IPS_LogMessage("PSAVehicle", "githubFindApkAcrossReleases: HTTP 403 (Rate-Limit?). Optional GithubToken setzen.");
+            IPS_LogMessage("PSAVehicle", "githubFindApkAcrossReleases: HTTP 403 (Rate-Limit?) – optional GithubToken setzen.");
             return null;
         }
         if ($code !== 200) {
@@ -568,18 +568,42 @@ class PSAVehicle extends IPSModule
             foreach ($rel['assets'] as $asset) {
                 $name = $asset['name'] ?? '';
                 $url  = $asset['browser_download_url'] ?? '';
-                // 1) exakter Treffer (strcasecmp)
+                // 1) exakter Treffer
                 if ($name !== '' && strcasecmp($name, $brandApkFilename) === 0 && $url !== '') {
                     return $url;
                 }
-                // 2) Heuristik: manchmal anders benannt (z.B. brand-<ver>.apk)
+                // 2) Heuristik: brand-*.apk (z. B. "opel-1.2.3.apk")
                 if ($name !== '' && $url !== '') {
-                    $want = strtolower(pathinfo($brandApkFilename, PATHINFO_FILENAME)); // z.B. 'opel'
+                    $want = strtolower(pathinfo($brandApkFilename, PATHINFO_FILENAME)); // 'opel'
                     if (preg_match('/\b' . preg_quote($want, '/') . '\b.*\\.apk$/i', strtolower($name))) {
-                        IPS_LogMessage("PSAVehicle", "Heuristik-Treffer: {$owner}/{$repo} → {$name}");
+                        IPS_LogMessage("PSAVehicle", "Heuristik-Treffer in {$owner}/{$repo}: {$name}");
                         return $url;
                     }
                 }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Versucht in Reihenfolge:
+     *   1) flobz/psa_apk      (primär, lt. Issues liegen dort Brand-APKs)
+     *   2) flobz/psa_car_controller (Fallback)
+     * und durchsucht jeweils die letzten N Releases.
+     */
+    private function resolveFlobzApkDownloadUrlDeep(string $brandApkFilename, int $maxReleases = 8): ?string
+    {
+        $repos = [
+            ['owner' => 'flobz', 'repo' => 'psa_apk'],
+            ['owner' => 'flobz', 'repo' => 'psa_car_controller'],
+        ];
+        foreach ($repos as $r) {
+            $url = $this->githubFindApkAcrossReleases($r['owner'], $r['repo'], $brandApkFilename, $maxReleases);
+            if ($url !== null) {
+                IPS_LogMessage("PSAVehicle", "APK in {$r['owner']}/{$r['repo']} gefunden: {$brandApkFilename}");
+                return $url;
+            } else {
+                IPS_LogMessage("PSAVehicle", "Keine passende APK in {$r['owner']}/{$r['repo']} über die letzten {$maxReleases} Releases.");
             }
         }
         return null;
