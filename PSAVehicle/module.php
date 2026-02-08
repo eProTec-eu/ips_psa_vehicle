@@ -2000,9 +2000,9 @@ class PSAVehicle extends IPSModule
         $verifier  = $this->pkceGenerateVerifier();             // ~43-128 chars
         $challenge = $this->pkceChallengeS256($verifier);
         $state     = bin2hex(random_bytes(16));
-
-        IPS_SetBuffer($this->InstanceID, "pkce_verifier", $verifier);
-        IPS_SetBuffer($this->InstanceID, "oauth_state",   $state);
+     
+        $this->SetBuffer("pkce_verifier", $verifier);
+        $this->SetBuffer("oauth_state",   $state);
 
         // 2) Parameter aus Properties
         $authUrlBase = rtrim($this->ReadPropertyString("AuthURL"), '/');
@@ -2051,5 +2051,70 @@ class PSAVehicle extends IPSModule
     public function ActionLogAuthorizeUrl(): void
     {
         IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): ".$this->ReadPropertyString("AuthorizeUrlDecoded"));
+    } 
+    
+    public function ActionSubmitOAuthCode(): bool
+    {
+        $code = trim($this->ReadPropertyString("OAuthCode"));
+        if ($code === '') { IPS_LogMessage("PSAVehicle","OAuth: Kein Code eingegeben."); return false; }
+
+        $verifier = $this->GetBuffer("pkce_verifier");
+        if ($verifier === '') { IPS_LogMessage("PSAVehicle","OAuth: Kein PKCE-Verifier vorhanden. Bitte Authorize-URL erneut erzeugen."); return false; }
+
+        $tokenUrl   = $this->ReadPropertyString("TokenURL");
+        $clientId   = $this->ReadPropertyString("ClientId");
+        $redirect   = $this->ReadPropertyString("RedirectUri");
+        $certPath   = $this->ReadPropertyString("CertPath"); // mTLS (Client-Zertifikat)
+        $keyPath    = $this->ReadPropertyString("KeyPath");
+
+        $post = [
+            'grant_type'    => 'authorization_code',
+            'code'          => $code,
+            'redirect_uri'  => $redirect,
+            'client_id'     => $clientId,
+            'code_verifier' => $verifier
+        ];
+
+        $resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
+        if (!$resp['ok']) {
+            IPS_LogMessage("PSAVehicle","OAuth: Token-Anforderung fehlgeschlagen: HTTP ".$resp['http']." | ".$resp['body']);
+            return false;
+        }
+
+        $json = json_decode($resp['body'], true);
+        if (!is_array($json) || empty($json['access_token'])) {
+            IPS_LogMessage("PSAVehicle","OAuth: Unerwartete Antwort: ".$resp['body']);
+            return false;
+        }
+
+        // Save tokens (passe Properties/Variablen an deine Modulstruktur an)
+        IPS_SetProperty($this->InstanceID, "AccessToken",  $json['access_token']);
+        if (!empty($json['refresh_token'])) {
+            IPS_SetProperty($this->InstanceID, "RefreshToken", $json['refresh_token']);
+        }
+        IPS_ApplyChanges($this->InstanceID);
+
+        IPS_LogMessage("PSAVehicle","OAuth: Token gespeichert. Expires_in=".($json['expires_in'] ?? 'n/a'));
+        return true;
+    }
+
+    private function curlPostForm(string $url, array $fields, string $certPem, string $keyPem): array
+    {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => http_build_query($fields, '', '&', PHP_QUERY_RFC3986),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 25,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
+            // mTLS mit deinem PSA-Client-Zertifikat (aus APK)
+            CURLOPT_SSLCERT        => $certPem,
+            CURLOPT_SSLKEY         => $keyPem
+        ]);
+        $body = curl_exec($ch);
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
+        $err  = curl_error($ch);
+        curl_close($ch);
+        return ['ok' => ($body !== false && $http >= 200 && $http < 300), 'body' => $body ?: $err, 'http' => $http];
     }    
 }
