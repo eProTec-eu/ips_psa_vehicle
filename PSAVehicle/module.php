@@ -1253,7 +1253,7 @@ class PSAVehicle extends IPSModule
 
         // RedirectURI ermitteln aus Ländercode und Brand
         $country = $this->ReadPropertyString("Country");
-        $this->autoSetRedirectUriFromBrand(string $brand, string $country);
+        $this->autoSetRedirectUriFromBrand($brand, $country);
 
         IPS_SetProperty($this->InstanceID, "AuthURL",  $authUrl);
         IPS_SetProperty($this->InstanceID, "TokenURL", $tokenUrl);
