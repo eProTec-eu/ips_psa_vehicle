@@ -224,39 +224,39 @@ class PSAVehicle extends IPSModule
                     "type" => "ExpansionPanel",
                     "caption" => "OAuth2 (manuelle Verbindung)",
                     "items" => [
-                        { "type": "Label", "caption": "1) Authorize-URL erzeugen (PKCE) und im Formular anzeigen:" },
+                        { "type" => "Label", "caption" => "1) Authorize-URL erzeugen (PKCE) und im Formular anzeigen:" },
                         {
-                        "type": "Button",
-                        "label": "Authorize-URL erzeugen & anzeigen",
-                        "onClick": "PSAVehicle_ActionGenerateAuthorizeUrl($id);"   // (neu, s. unten)
+                        "type" => "Button",
+                        "label" => "Authorize-URL erzeugen & anzeigen",
+                        "onClick" => "PSAVehicle_ActionGenerateAuthorizeUrl($id);"   // (neu, s. unten)
                         },
                         {
-                        "type": "ValidationTextBox",
-                        "name": "AuthorizeUrlDecoded",
-                        "caption": "Dekodierte Authorize-URL",
-                        "width": "600px",
-                        "enabled": false,
-                        "value": $this->ReadPropertyString("AuthorizeUrlDecoded")
+                        "type" => "ValidationTextBox",
+                        "name" => "AuthorizeUrlDecoded",
+                        "caption" => "Dekodierte Authorize-URL",
+                        "width" => "600px",
+                        "enabled" => false,
+                        "value" => $this->ReadPropertyString("AuthorizeUrlDecoded")
                         },
                         {
-                        "type": "Button",
-                        "label": "Authorize-URL ins Log schreiben",
-                        "onClick": "PSAVehicle_ActionLogAuthorizeUrl($id);"        // (optional)
+                        "type" => "Button",
+                        "label" => "Authorize-URL ins Log schreiben",
+                        "onClick" => "PSAVehicle_ActionLogAuthorizeUrl($id);"        // (optional)
                         },
 
-                        { "type": "Label", "caption": "2) In Browser öffnen → Login → F12/Network → finalen OK/Allow klicken → code=… aus 'Location' kopieren." },
-                        { "type": "Label", "caption": "3) Code hier einfügen und tauschen:" },
+                        { "type" => "Label", "caption" => "2) In Browser öffnen → Login → F12/Network → finalen OK/Allow klicken → code=… aus 'Location' kopieren." },
+                        { "type" => "Label", "caption" => "3) Code hier einfügen und tauschen:" },
                         {
-                        "type": "ValidationTextBox",
-                        "name": "OAuthCode",
-                        "caption": "OAuth-Code (36 Zeichen)",
-                        "width": "320px",
-                        "value": $this->ReadPropertyString("OAuthCode")
+                        "type" => "ValidationTextBox",
+                        "name" => "OAuthCode",
+                        "caption" => "OAuth-Code (36 Zeichen)",
+                        "width" => "320px",
+                        "value" => $this->ReadPropertyString("OAuthCode")
                         },
                         {
-                        "type": "Button",
-                        "label": "Code einfügen & tauschen",
-                        "onClick": "PSAVehicle_ActionSubmitOAuthCode($id);"        // (neu, tauscht Code → Token)
+                        "type" => "Button",
+                        "label" => "Code einfügen & tauschen",
+                        "onClick" => "PSAVehicle_ActionSubmitOAuthCode($id);"        // (neu, tauscht Code → Token)
                         }
                     ]
                 ],                
