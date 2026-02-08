@@ -691,15 +691,16 @@ class PSAVehicle extends IPSModule
             }
             @unlink($outApk);
         }
-
+        IPS_LogMessage("PSAVehicle", "Unzip fehlgeschlagen!");
+        return null;
         // Wenn extern nicht möglich/fehlgeschlagen: reiner PHP-Decoder als Fallback
-        $ok = $this->bunzip2Pure($tmpBz2, $outApk);
+        /*$ok = $this->bunzip2Pure($tmpBz2, $outApk);
         @unlink($tmpBz2);
         if (!$ok) {
             IPS_LogMessage("PSAVehicle", "RawFallback: Dekomprimierung fehlgeschlagen: " . basename($srcBz2));
             @unlink($outApk);
             return null;
-        }
+        
 
         $size = @filesize($outApk);
         if ($size === false || $size < 1024*100) {
@@ -728,7 +729,7 @@ class PSAVehicle extends IPSModule
         }
 
         IPS_LogMessage("PSAVehicle", "RawFallback: APK bereit: {$outApk} (".number_format($size)." Bytes)");
-        return $outApk;
+        return $outApk;*/
     }
 
     /**
@@ -1450,6 +1451,7 @@ class PSAVehicle extends IPSModule
      *  - Stream: 4-Byte-Header, 0..n Blöcke, Endmarker mit Stream-CRC. [1](https://en.wikipedia.org/wiki/Bzip2)[2](https://www.loc.gov/preservation/digital/formats/fdd/fdd000600.shtml)
      *  - Praktische Wire-Format-Bits/Blockmagics sind in der Wuffs-Doc illustriert. [3](https://github.com/google/wuffs/blob/f1698226806569eb45ea009deee89a108f8d5395/std/bzip2/README.md)
      */
+    /*
     private function bunzip2Pure(string $srcBz2, string $dstFile, bool $verifyCrc = false): bool
     {
         $in = @fopen($srcBz2, 'rb');
@@ -1794,7 +1796,7 @@ class PSAVehicle extends IPSModule
         fclose($in);
         fclose($out);
         return ($writtenTotal > 0);
-    }
+    }*/
 
     /**
      * Baut eine canonical Huffman-Tabelle aus Code-Längen (<= 20 Bit).
