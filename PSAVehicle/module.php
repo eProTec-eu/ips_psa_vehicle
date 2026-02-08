@@ -51,6 +51,8 @@ class PSAVehicle extends IPSModule
 
         // Optional: Variable, um PSA Code/Status anzuzeigen
         $this->RegisterVariableString("PSACode", "PSA Code / Status", "", 10);
+        $this->RegisterPropertyString("AuthorizeUrlDecoded", "");  // read-only Anzeige im Formular
+        $this->RegisterPropertyString("OAuthCode", "");            // Eingabefeld für den Code (36 Zeichen)
     }
 
     public function ApplyChanges()
@@ -215,6 +217,47 @@ class PSAVehicle extends IPSModule
                                 ]
                             ]
                         ]
+                    ]
+                ], 
+                
+                [
+                    "type": "ExpansionPanel",
+                    "caption": "OAuth2 (manuelle Verbindung)",
+                    "items": [
+                        { "type": "Label", "caption": "1) Authorize-URL erzeugen (PKCE) und im Formular anzeigen:" },
+                        {
+                        "type": "Button",
+                        "label": "Authorize-URL erzeugen & anzeigen",
+                        "onClick": "PSAVehicle_ActionGenerateAuthorizeUrl($id);"   // (neu, s. unten)
+                        },
+                        {
+                        "type": "ValidationTextBox",
+                        "name": "AuthorizeUrlDecoded",
+                        "caption": "Dekodierte Authorize-URL",
+                        "width": "600px",
+                        "enabled": false,
+                        "value": $this->ReadPropertyString("AuthorizeUrlDecoded")
+                        },
+                        {
+                        "type": "Button",
+                        "label": "Authorize-URL ins Log schreiben",
+                        "onClick": "PSAVehicle_ActionLogAuthorizeUrl($id);"        // (optional)
+                        },
+
+                        { "type": "Label", "caption": "2) In Browser öffnen → Login → F12/Network → finalen OK/Allow klicken → code=… aus 'Location' kopieren." },
+                        { "type": "Label", "caption": "3) Code hier einfügen und tauschen:" },
+                        {
+                        "type": "ValidationTextBox",
+                        "name": "OAuthCode",
+                        "caption": "OAuth-Code (36 Zeichen)",
+                        "width": "320px",
+                        "value": $this->ReadPropertyString("OAuthCode")
+                        },
+                        {
+                        "type": "Button",
+                        "label": "Code einfügen & tauschen",
+                        "onClick": "PSAVehicle_ActionSubmitOAuthCode($id);"        // (neu, tauscht Code → Token)
+                        }
                     ]
                 ],                
 
@@ -1941,5 +1984,63 @@ class PSAVehicle extends IPSModule
             }
         }
         $zip->close();
+    }    
+    public function ActionGenerateAuthorizeUrl(): void
+    {
+        // 1) PKCE: code_verifier + code_challenge (S256)
+        $verifier  = $this->pkceGenerateVerifier();             // ~43-128 chars
+        $challenge = $this->pkceChallengeS256($verifier);
+        $state     = bin2hex(random_bytes(16));
+
+        IPS_SetBuffer($this->InstanceID, "pkce_verifier", $verifier);
+        IPS_SetBuffer($this->InstanceID, "oauth_state",   $state);
+
+        // 2) Parameter aus Properties
+        $authUrlBase = rtrim($this->ReadPropertyString("AuthURL"), '/');
+        $clientId    = $this->ReadPropertyString("ClientId");
+        $redirectUri = $this->ReadPropertyString("RedirectUri");    // z.B. mymap://oauth2redirect/de (je Marke)
+        // scope & response_type
+        $scope       = "openid profile";
+        $respType    = "code";
+
+        // 3) Authorize-URL (ENCODED)
+        $q = http_build_query([
+            'client_id'             => $clientId,
+            'redirect_uri'          => $redirectUri,
+            'response_type'         => $respType,
+            'scope'                 => $scope,
+            'state'                 => $state,
+            'code_challenge'        => $challenge,
+            'code_challenge_method' => 'S256'
+        ], '', '&', PHP_QUERY_RFC3986);
+
+        $encoded = $authUrlBase . '/authorize?' . $q;
+
+        // 4) Für Anzeige im Formular: DEKODIERTE Variante (kopierfertig)
+        $decoded = $authUrlBase . '/authorize?' . urldecode($q);
+        IPS_SetProperty($this->InstanceID, "AuthorizeUrlDecoded", $decoded);
+        IPS_ApplyChanges($this->InstanceID);
+
+        IPS_LogMessage("PSAVehicle", "Authorize URL (encoded): ".$encoded);
+        IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): ".$decoded);
+        // Der manuelle Flow (URL im Browser öffnen → F12/Network → code in Location) folgt #779. 
+    }
+
+    private function pkceGenerateVerifier(): string
+    {
+        // 43..128 Zeichen, unreserved (RFC 7636)
+        $raw = base64_encode(random_bytes(64));
+        // Base64URL ohne '='
+        return rtrim(strtr($raw, '+/', '-_'), '=');
+    }
+
+    private function pkceChallengeS256(string $verifier): string
+    {
+        return rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+    }
+
+    public function ActionLogAuthorizeUrl(): void
+    {
+        IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): ".$this->ReadPropertyString("AuthorizeUrlDecoded"));
     }    
 }
