@@ -241,7 +241,6 @@ class PSAVehicle extends IPSModule
                             "name"    => "AuthorizeUrlDecoded",
                             "caption" => "Dekodierte Authorize-URL",
                             "width"   => "600px",
-                            "enabled" => false,
                             "value"   => $this->ReadPropertyString("AuthorizeUrlDecoded")
                         ],
                         [
