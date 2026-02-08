@@ -45,7 +45,7 @@ class PSAVehicle extends IPSModule
         // flobz
         $this->RegisterPropertyString("FlobzApkUrl", "");     // z. B. https://.../app-release.apk
         $this->RegisterPropertyString("FlobzApkPfxPath", "assets/MWPMYMA1.pfx"); // Default aus deinem Helper
-        $this->RegisterPropertyString("FlobzApkPfxPass", ""); // falls gesetzt
+        $this->RegisterPropertyString("FlobzApkPfxPass", "y5Y2my5B"); // falls gesetzt
         $this->RegisterPropertyString("CertCacheDir", "/var/lib/symcon/psa_certs"); // anpassen, absolute Pfade!
         $this->RegisterPropertyString("GithubToken", ""); // optional: Personal Access Token (nur 'public_repo' nötig)
 
@@ -435,7 +435,8 @@ class PSAVehicle extends IPSModule
         // 6) PFX aus APK extrahieren → PEMs gewinnen (nutzt deine bestehende Routine)
         try {
             // Standardpfad & leeres Passwort – so ist es in flobz beschrieben: assets/MWPMYMA1.pfx (aus der APK) [1](https://community.openhab.org/t/groupe-psa-cars-binding-peugeot-citroen-ds-opel-vauxhall/110580?page=5)
-            [$certPem, $keyPem] = $this->extractPemFromApk($apkPath, 'assets/MWPMYMA1.pfx', '');
+            $pass = $this->ReadPropertyString("FlobzApkPfxPass");
+            ($apkPath, 'assets/MWPMYMA1.pfx', $pass);
         } catch (\Throwable $e) {
             IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: PFX-Extraktion aus APK fehlgeschlagen: " . $e->getMessage());
             return false;
@@ -1923,5 +1924,20 @@ class PSAVehicle extends IPSModule
         }
 
         return false;
+    }    
+    private function debugListPfxInApk(string $apkPath): void
+    {
+        $zip = new ZipArchive();
+        if ($zip->open($apkPath) !== true) {
+            IPS_LogMessage("PSAVehicle", "debugListPfxInApk: APK nicht geöffnet: $apkPath");
+            return;
+        }
+        for ($i=0; $i<$zip->numFiles; $i++) {
+            $st = $zip->statIndex($i);
+            if ($st && isset($st['name']) && preg_match('~^assets/.*\\.pfx$~i', $st['name'])) {
+                IPS_LogMessage("PSAVehicle", "PFX gefunden: ".$st['name']);
+            }
+        }
+        $zip->close();
     }    
 }
