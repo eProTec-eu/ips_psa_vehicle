@@ -516,7 +516,13 @@ class PSAVehicle extends IPSModule
 
         // weitere Daten aus der APK laden
         try {
-            $data = $this->ExtractAppDataFromApkExternal($apkPath, $country);
+            
+            $countryFallback = $this->ReadPropertyString("Country");
+            if ($countryFallback === null || $countryFallback === '') {
+                $countryFallback = 'de';
+            }
+
+            $data = $this->ExtractAppDataFromApkExternal($apkPath, $countryFallback);
 
             IPS_LogMessage("PSAVehicle", "ClientId = "     . $data["clientId"]);
             IPS_LogMessage("PSAVehicle", "ClientSecret = " . $data["clientSecret"]);
