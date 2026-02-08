@@ -1613,95 +1613,82 @@ class PSAVehicle extends IPSModule
                     }
                 }
 
-                // --- Entropie-Dekodierung (50er Läufe per Selector)
-                $RUNA=0; $RUNB=1;
-                $groupIndex=0; $groupRun=0;
-                $symbols = []; $nsym=0;
+                // --- Entropie-Dekodierung über Selector-Gruppen (je 50 Symbole)
+                $RUNA = 0; 
+                $RUNB = 1;
+                $eob  = $alphaSize - 1;
 
-                $getTable = function() use (&$groupRun,&$groupIndex,$nSelectors,&$selectors,&$tables) {
-                    if ($groupRun===0) {
-                        $groupRun = 50;
-                        $t = $tables[$selectors[$groupIndex]];
+                $groupIndex = 0;     // Index in $selectors
+                $remain     = 0;     // verbleibende Decodes mit aktueller Gruppe (50 → 0)
+                $currTable  = null;  // aktuell aktive Huffman-Tabelle
+
+                $nextTable = function() use (&$groupIndex, &$remain, &$currTable, $selectors, $tables, $nSelectors) {
+                    if ($remain === 0) {
+                        if ($groupIndex >= $nSelectors) return false;  // Schutz
+                        $currTable = $tables[$selectors[$groupIndex]];
                         $groupIndex++;
-                        return $t;
-                    } else {
-                        $groupRun--;
-                        return $tables[$selectors[$groupIndex-1]];
+                        $remain = 50;
                     }
+                    $remain--;
+                    return true;
                 };
 
-                // Huffman-Dekoder (Bit‑Reader + Decodierbäume)
-                $decodeSym = function(array $tab) use ($br) {
-                    $code = 0;
-                    for ($l = $tab['minLen']; $l <= $tab['maxLen']; $l++) {
-                        $bit = $br->readBits(1);
-                        if ($bit === null) return null;
-                        $code = ($code << 1) | $bit;
+                $symbols = [];
+                $nsym    = 0;
 
-                        // Prüfen, ob der Code in den Bereich dieser Länge fällt:
-                        if ($code <= $tab['limit'][$l]) {
-                            // Position im perm-Array: base[len] + (code - firstCode[len])
-                            $idx = $tab['base'][$l] + ($code - $tab['firstCode'][$l]);
-                            return $tab['perm'][$idx] ?? null;
-                        }
-                    }
-                    return null;
+                // Hilfsfunktion: EIN Symbol mit aktueller Tabelle dekodieren
+                $getSym = function() use (&$currTable, $nextTable, $decodeSym) {
+                    if (!$nextTable()) return null;
+                    return $decodeSym($currTable);
                 };
 
-                // MTF-Dekodierung vorbereiten
-                $yy = $seqToUnseq; // Liste der Bytes (0..255) in benutzter Reihenfolge
+                // Hauptschleife: solange bis EOB
+                while (true) {
+                    // Erstes Symbol des (Teil-)Zyklus holen
+                    $sym = $getSym();
+                    if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: Huffman decode fail (initial)"); return false; }
 
-                // Symbolfluss (bis End-of-Block Markersymbol kommt (= alphaSize-1))
-                $eob = $alphaSize - 1;
-                for (;;) {
-                    $tab = $getTable();
-                    $sym = $decodeSym($tab);
-                    if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: Huffman decode fail"); return false; }
+                    if ($sym === $eob) {
+                        break; // Block-Ende
+                    }
 
                     if ($sym === $RUNA || $sym === $RUNB) {
-                        // bzip2: RUNA/RUNB bilden eine binäre Zahl (Basis 2) über mehrere Symbole.
-                        // Start r=-1, danach addieren: r += n   (bei RUNA)  bzw. r += (n<<1) (bei RUNB),
-                        // und n <<= 1 nach jedem RUNA/RUNB. Am Ende gilt: runCount = r + 1.
+                        // ---- RUN-Dekodierung (bzip2: binärer Zähler)
                         $r = -1;
                         $n = 1;
                         do {
-                            if ($sym === $RUNA) {
-                                $r += $n;
-                            } else { // RUNB
-                                $r += ($n << 1);
-                            }
+                            if ($sym === $RUNA) $r += $n;
+                            else                $r += ($n << 1);
                             $n <<= 1;
 
-                            // nächstes Symbol lesen (kann wieder RUNA/RUNB sein oder ein echtes Symbol/EOB)
-                            $tab = $getTable();
-                            $sym = $decodeSym($tab);
-                            if ($sym === null) {
-                                fclose($in); fclose($out);
-                                IPS_LogMessage("PSAVehicle","bunzip2Pure: RUN decode fail");
-                                return false;
-                            }
+                            $sym = $getSym();
+                            if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: RUN decode fail"); return false; }
                         } while ($sym === $RUNA || $sym === $RUNB);
 
-                        // runCount = r + 1 Kopien des vordersten MTF-Bytes ausgeben
+                        // Lauflänge ausgeben (vorderstes MTF-Byte wiederholen)
                         $runCount = $r + 1;
                         $c = $yy[0];
-                        for ($k = 0; $k < $runCount; $k++) {
-                            $symbols[$nsym++] = $c;
-                        }
+                        for ($k = 0; $k < $runCount; $k++) $symbols[$nsym++] = $c;
 
-                        // Falls das nächste Symbol EOB ist, brich Block-Decode entsprechend ab;
-                        // sonst geht die äußere Schleife mit dem bereits gelesenen $sym weiter.
+                        // WICHTIG: $sym ist hier bereits das NÄCHSTE Symbol nach der RUN-Sequenz:
                         if ($sym === $eob) break;
-                    }
-                    if ($sym === $eob) break; // End-of-block
 
-                    // Normalsymbol: MTF-Index (sym-1)
-                    $j = $sym - 1;
-                    $c = $yy[$j];
-                    // Move-to-front
-                    array_splice($yy, $j, 1);
-                    array_unshift($yy, $c);
-                    $symbols[$nsym++] = $c;
+                        // ... und fällt JETZT in die Normalsymbol-Verarbeitung unten
+                    }
+
+                    if ($sym !== $RUNA && $sym !== $RUNB) {
+                        // ---- Normalsymbol: MTF-Index (sym-1)
+                        $j = $sym - 1;
+                        if (!isset($yy[$j])) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: MTF-Index out of range"); return false; }
+                        $c = $yy[$j];
+
+                        // Move-to-front
+                        array_splice($yy, $j, 1);
+                        array_unshift($yy, $c);
+
+                        $symbols[$nsym++] = $c;
+                        // Nächste Iteration liest ein NEUES Symbol (getSym() oben)
+                    }
                 }
 
                 // --- Inverse BWT mit origPtr
