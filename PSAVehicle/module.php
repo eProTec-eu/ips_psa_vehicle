@@ -2222,7 +2222,7 @@ class PSAVehicle extends IPSModule
             }
             return '';
         };
-
+/*
         // 2) cultures.json lesen → culture bestimmen
         $culturesJson = $readEntry('res/raw/cultures.json');
         if ($culturesJson === '') {
@@ -2243,7 +2243,9 @@ class PSAVehicle extends IPSModule
         if (count($parts) !== 2) {
             throw new \RuntimeException("Unerwartetes Culture-Format: $culture");
         }
-        [$lang, $COUNTRY] = $parts; // de, DE
+        [$lang, $COUNTRY] = $parts; // de, DE*/
+        //NUR zum TESTEN
+        $culture = "de_DE";
 
         // 3) parameters.json lesen
         $parametersPath = sprintf('res/raw-%s-r%s/parameters.json', strtolower($lang), strtoupper($COUNTRY));
@@ -2293,4 +2295,51 @@ class PSAVehicle extends IPSModule
             'parameters'   => $parameters,
         ];
     }  
+    /** Listet alle Einträge der APK (ähnlich 'unzip -Z1') */
+    private function apkListEntries(string $apkPath): array
+    {
+        $which = function(string $cmd): string {
+            return trim(shell_exec('command -v '.escapeshellarg($cmd).' 2>/dev/null') ?? '');
+        };
+        $binUnzip   = $which('unzip');
+        $binBusybox = $which('busybox');
+        $bin7z      = $which('7z');
+
+        $out = '';
+        if ($binUnzip !== '') {
+            $cmd = escapeshellcmd($binUnzip).' -Z1 '.escapeshellarg($apkPath).' 2>/dev/null';
+            $out = shell_exec($cmd) ?? '';
+        } elseif ($binBusybox !== '') {
+            // busybox hat kein -Z1; 'unzip -l' und parsen wäre fehleranfällig → fallback 7z bevorzugen
+            $cmd = escapeshellcmd($binBusybox).' unzip -l '.escapeshellarg($apkPath).' 2>/dev/null';
+            $raw = shell_exec($cmd) ?? '';
+            // grob parsen: letzte Spaltengruppe enthält Namen
+            $lines = array_filter(array_map('trim', explode("\n", $raw)));
+            $files = [];
+            foreach ($lines as $ln) {
+                // Zeilen mit Größe/Datum/Name: ... <size> <date> <time> <name>
+                if (preg_match('/^\s*\d+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+(.+)$/', $ln, $m)) {
+                    $files[] = $m[1];
+                }
+            }
+            return $files;
+        } elseif ($bin7z !== '') {
+            $cmd = escapeshellcmd($bin7z).' l -ba '.escapeshellarg($apkPath).' 2>/dev/null';
+            $raw = shell_exec($cmd) ?? '';
+            $files = [];
+            foreach (explode("\n", $raw) as $ln) {
+                // 7z -ba: <date> <time> <attr> <size> <compressed> <name>
+                $parts = preg_split('/\s+/', trim($ln), 6);
+                if (count($parts) === 6) {
+                    $files[] = $parts[5];
+                }
+            }
+            return $files;
+        } else {
+            return [];
+        }
+
+        $files = array_filter(array_map('trim', explode("\n", $out)));
+        return array_values($files);
+    }    
 }
