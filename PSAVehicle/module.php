@@ -1656,19 +1656,39 @@ class PSAVehicle extends IPSModule
                     if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: Huffman decode fail"); return false; }
 
                     if ($sym === $RUNA || $sym === $RUNB) {
-                        // Lauflängen-Kodierung (bitweise akkumuliert)
-                        $run = 0; $inc = 1;
+                        // bzip2: RUNA/RUNB bilden eine binäre Zahl (Basis 2) über mehrere Symbole.
+                        // Start r=-1, danach addieren: r += n   (bei RUNA)  bzw. r += (n<<1) (bei RUNB),
+                        // und n <<= 1 nach jedem RUNA/RUNB. Am Ende gilt: runCount = r + 1.
+                        $r = -1;
+                        $n = 1;
                         do {
-                            $run += ($sym === $RUNA) ? $inc : ($inc<<1);
+                            if ($sym === $RUNA) {
+                                $r += $n;
+                            } else { // RUNB
+                                $r += ($n << 1);
+                            }
+                            $n <<= 1;
+
+                            // nächstes Symbol lesen (kann wieder RUNA/RUNB sein oder ein echtes Symbol/EOB)
                             $tab = $getTable();
                             $sym = $decodeSym($tab);
-                            if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: RUN decode fail"); return false; }
-                            $inc <<= 1;
+                            if ($sym === null) {
+                                fclose($in); fclose($out);
+                                IPS_LogMessage("PSAVehicle","bunzip2Pure: RUN decode fail");
+                                return false;
+                            }
                         } while ($sym === $RUNA || $sym === $RUNB);
-                        // Wiederhole das vorderste Byte 'run' Mal
+
+                        // runCount = r + 1 Kopien des vordersten MTF-Bytes ausgeben
+                        $runCount = $r + 1;
                         $c = $yy[0];
-                        while ($run-- > 0) { $symbols[$nsym++] = $c; }
-                        // Falls das nächste Symbol EOB ist: Schleife fällt unten raus
+                        for ($k = 0; $k < $runCount; $k++) {
+                            $symbols[$nsym++] = $c;
+                        }
+
+                        // Falls das nächste Symbol EOB ist, brich Block-Decode entsprechend ab;
+                        // sonst geht die äußere Schleife mit dem bereits gelesenen $sym weiter.
+                        if ($sym === $eob) break;
                     }
                     if ($sym === $eob) break; // End-of-block
 
