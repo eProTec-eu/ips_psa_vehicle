@@ -677,6 +677,37 @@ class PSAVehicle extends IPSModule
         // Dekomprimieren: bevorzugt stream-basiert → bzopen/bzread; sonst bzdecompress
         /*$ok = $this->decompressBz2File($tmpBz2, $outApk);
         @unlink($tmpBz2);*/
+
+        // ... nach erfolgreichem Download in $tmpBz2 ...
+        // Zuerst: externe Dekompression probieren
+        if ($this->bunzip2ViaExternal($tmpBz2, $outApk)) {
+            @unlink($tmpBz2);
+            $size = @filesize($outApk);
+            if ($size !== false && $size > 1024*100) {
+                IPS_LogMessage("PSAVehicle", "RawFallback: APK bereit (extern): {$outApk} (".number_format($size)." Bytes)");
+                @chmod($outApk, 0600);
+                return $outApk;
+            }
+            @unlink($outApk);
+        }
+
+        // Wenn extern nicht möglich/fehlgeschlagen: reiner PHP-Decoder als Fallback
+        $ok = $this->bunzip2Pure($tmpBz2, $outApk);
+        @unlink($tmpBz2);
+        if (!$ok) {
+            IPS_LogMessage("PSAVehicle", "RawFallback: Dekomprimierung fehlgeschlagen: " . basename($srcBz2));
+            @unlink($outApk);
+            return null;
+        }
+
+        $size = @filesize($outApk);
+        if ($size === false || $size < 1024*100) {
+            IPS_LogMessage("PSAVehicle", "RawFallback: APK verdächtig klein ({$size} Bytes). Abbruch.");
+            @unlink($outApk);
+            return null;
+        }
+        @chmod($outApk, 0600);
+        return $outApk;
         
         // $tmpBz2 (geladen) → $outApk
         $ok = $this->bunzip2Pure($tmpBz2, $outApk);
@@ -1832,5 +1863,65 @@ class PSAVehicle extends IPSModule
             'perm'  =>$perm,
             'firstCode'=>$firstCode
         ];
-    }  
+    } 
+    
+    /**
+     * Versucht .bz2 → .apk mit externem Tool (bzip2/busybox) oder Python3 (bz2).
+     * Liefert true, wenn $dst erfolgreich geschrieben wurde.
+     */
+    private function bunzip2ViaExternal(string $srcBz2, string $dstApk): bool
+    {
+        // Sicherheit: Zielverzeichnis existiert?
+        $dir = dirname($dstApk);
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true)) return false;
+
+        // 1) bzip2 -dc (klassisch)
+        $bin = trim(shell_exec('command -v bzip2 2>/dev/null') ?? '');
+        if ($bin !== '') {
+            $cmd = escapeshellcmd($bin) . ' -dc ' . escapeshellarg($srcBz2);
+            $des = [['pipe','r'], ['file',$dstApk,'w'], ['pipe','w']];
+            $proc = proc_open($cmd, $des, $pipes, null, null, ['bypass_shell'=>true]);
+            if (is_resource($proc)) {
+                fclose($pipes[0]);  // stdin
+                $stderr = stream_get_contents($pipes[2]); fclose($pipes[2]);
+                $code = proc_close($proc);
+                if ($code === 0 && @filesize($dstApk) > 1024*100) return true;
+                @unlink($dstApk);
+            }
+        }
+
+        // 2) busybox bunzip2 -c
+        $bb = trim(shell_exec('command -v busybox 2>/dev/null') ?? '');
+        if ($bb !== '') {
+            $cmd = escapeshellcmd($bb) . ' bunzip2 -c ' . escapeshellarg($srcBz2);
+            $des = [['pipe','r'], ['file',$dstApk,'w'], ['pipe','w']];
+            $proc = proc_open($cmd, $des, $pipes, null, null, ['bypass_shell'=>true]);
+            if (is_resource($proc)) {
+                fclose($pipes[0]);
+                $stderr = stream_get_contents($pipes[2]); fclose($pipes[2]);
+                $code = proc_close($proc);
+                if ($code === 0 && @filesize($dstApk) > 1024*100) return true;
+                @unlink($dstApk);
+            }
+        }
+
+        // 3) Python3 mit stdlib bz2
+        $py = trim(shell_exec('command -v python3 2>/dev/null') ?? '');
+        if ($py !== '') {
+            $script = <<<PY
+    import sys,bz2
+    src, dst = sys.argv[1], sys.argv[2]
+    with open(src,'rb') as f: data = f.read()
+    out = bz2.decompress(data)
+    with open(dst,'wb') as g: g.write(out)
+    PY;
+            $cmd = escapeshellcmd($py) . ' -c ' . escapeshellarg($script) . ' ' .
+                escapeshellarg($srcBz2) . ' ' . escapeshellarg($dstApk);
+            exec($cmd, $o, $ret);
+            if ($ret === 0 && @filesize($dstApk) > 1024*100) return true;
+            @unlink($dstApk);
+        }
+
+        return false;
+    }    
 }
