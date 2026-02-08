@@ -53,6 +53,8 @@ class PSAVehicle extends IPSModule
         $this->RegisterVariableString("PSACode", "PSA Code / Status", "", 10);
         $this->RegisterPropertyString("AuthorizeUrlDecoded", "");  // read-only Anzeige im Formular
         $this->RegisterPropertyString("OAuthCode", "");            // Eingabefeld für den Code (36 Zeichen)
+        $this->RegisterPropertyString("RedirectURI", "");          // z. B. mymap://oauth2redirect/de (je Marke unterschiedlich) 
+        $this->RegisterPropertyString("Country", "DE");             // Ländercode       
     }
 
     public function ApplyChanges()
@@ -1249,6 +1251,10 @@ class PSAVehicle extends IPSModule
         $tokenUrl  = "https://{$host}/am/oauth2/access_token";
         $deviceUrl = "https://{$host}/am/oauth2/device/code"; // ggf. anpassen, falls abweichend
 
+        // RedirectURI ermitteln aus Ländercode und Brand
+        $country = $this->ReadPropertyString("Country"));
+        $this->autoSetRedirectUriFromBrand(string $brand, string $country);
+
         IPS_SetProperty($this->InstanceID, "AuthURL",  $authUrl);
         IPS_SetProperty($this->InstanceID, "TokenURL", $tokenUrl);
         IPS_SetProperty($this->InstanceID, "DeviceURL", $deviceUrl);
@@ -2006,8 +2012,8 @@ class PSAVehicle extends IPSModule
 
         // 2) Parameter aus Properties
         $authUrlBase = rtrim($this->ReadPropertyString("AuthURL"), '/');
-        $clientId    = $this->ReadPropertyString("ClientId");
-        $redirectUri = $this->ReadPropertyString("RedirectUri");    // z.B. mymap://oauth2redirect/de (je Marke)
+        $clientId    = $this->ReadPropertyString("ClientID");
+        $redirectUri = $this->ReadPropertyString("RedirectURI");    // z.B. mymap://oauth2redirect/de (je Marke)
         // scope & response_type
         $scope       = "openid profile";
         $respType    = "code";
@@ -2062,8 +2068,8 @@ class PSAVehicle extends IPSModule
         if ($verifier === '') { IPS_LogMessage("PSAVehicle","OAuth: Kein PKCE-Verifier vorhanden. Bitte Authorize-URL erneut erzeugen."); return false; }
 
         $tokenUrl   = $this->ReadPropertyString("TokenURL");
-        $clientId   = $this->ReadPropertyString("ClientId");
-        $redirect   = $this->ReadPropertyString("RedirectUri");
+        $clientId   = $this->ReadPropertyString("ClientID");
+        $redirect   = $this->ReadPropertyString("RedirectURI");
         $certPath   = $this->ReadPropertyString("CertPath"); // mTLS (Client-Zertifikat)
         $keyPath    = $this->ReadPropertyString("KeyPath");
 
@@ -2116,5 +2122,34 @@ class PSAVehicle extends IPSModule
         $err  = curl_error($ch);
         curl_close($ch);
         return ['ok' => ($body !== false && $http >= 200 && $http < 300), 'body' => $body ?: $err, 'http' => $http];
+    }    
+
+    private function autoSetRedirectUriFromBrand(string $brand, string $country): bool
+    {
+        $brand = strtolower($brand);
+        $country = strtolower($country); // z. B. "de", "fr", "nl", ...
+
+        // Minimal-Mapping aus den Praxisbeispielen (#779)
+        $map = [
+            'peugeot'  => 'mymap',
+            'vauxhall' => 'mymvxsdk',
+            'ds'       => 'mymdssdk',
+            // Ergänze bei Bedarf:
+            // 'citroen'  => 'mycitroensdk',
+            // 'opel'     => 'myopelsdk',
+        ];
+
+        if (!isset($map[$brand])) {
+            IPS_LogMessage("PSAVehicle", "RedirectUri: unbekannte Marke '{$brand}' – bitte manuell setzen.");
+            return false;
+        }
+        $scheme = $map[$brand];
+
+        $uri = sprintf('%s://oauth2redirect/%s', $scheme, $country);
+        IPS_SetProperty($this->InstanceID, "RedirectURI", $uri);
+        IPS_ApplyChanges($this->InstanceID);
+
+        IPS_LogMessage("PSAVehicle", "RedirectUri gesetzt: {$uri}");
+        return true;
     }    
 }
