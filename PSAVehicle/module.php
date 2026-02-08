@@ -518,6 +518,7 @@ class PSAVehicle extends IPSModule
         try {
             
             $countryFallback = $this->ReadPropertyString("Country");
+            $countryFallback = strtolower($countryFallback); // z. B. "de", "fr", "nl", ...
             if ($countryFallback === null || $countryFallback === '') {
                 $countryFallback = 'de';
             }
