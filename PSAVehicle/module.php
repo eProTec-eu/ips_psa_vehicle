@@ -221,9 +221,9 @@ class PSAVehicle extends IPSModule
                 ], 
                 
                 [
-                    "type": "ExpansionPanel",
-                    "caption": "OAuth2 (manuelle Verbindung)",
-                    "items": [
+                    "type" => "ExpansionPanel",
+                    "caption" => "OAuth2 (manuelle Verbindung)",
+                    "items" => [
                         { "type": "Label", "caption": "1) Authorize-URL erzeugen (PKCE) und im Formular anzeigen:" },
                         {
                         "type": "Button",
