@@ -436,7 +436,7 @@ class PSAVehicle extends IPSModule
         try {
             // Standardpfad & leeres Passwort – so ist es in flobz beschrieben: assets/MWPMYMA1.pfx (aus der APK) [1](https://community.openhab.org/t/groupe-psa-cars-binding-peugeot-citroen-ds-opel-vauxhall/110580?page=5)
             $pass = $this->ReadPropertyString("FlobzApkPfxPass");
-            ($apkPath, 'assets/MWPMYMA1.pfx', $pass);
+            [$certPem, $keyPem] = $this->extractPemFromApk($apkPath, 'assets/MWPMYMA1.pfx', $pass);
         } catch (\Throwable $e) {
             IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: PFX-Extraktion aus APK fehlgeschlagen: " . $e->getMessage());
             return false;
