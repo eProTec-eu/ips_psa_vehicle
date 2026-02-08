@@ -232,7 +232,7 @@ class PSAVehicle extends IPSModule
                         [
                             "type"    => "Button",
                             "label"   => "Authorize-URL erzeugen & anzeigen",
-                            "onClick" => "PSAVehicle_ActionGenerateAuthorizeUrl($id);"
+                            "onClick" => 'PSAVehicle_ActionGenerateAuthorizeUrl($id);'
                         ],
                         [
                             "type"    => "ValidationTextBox",
@@ -245,9 +245,8 @@ class PSAVehicle extends IPSModule
                         [
                             "type"    => "Button",
                             "label"   => "Authorize-URL ins Log schreiben",
-                            "onClick" => "PSAVehicle_ActionLogAuthorizeUrl($id);"
+                            "onClick" => 'PSAVehicle_ActionLogAuthorizeUrl($id);'
                         ],
-
                         [
                             "type"    => "Label",
                             "caption" => "2) In Browser öffnen → Login → F12/Network → finalen OK/Allow klicken → code=… aus 'Location' kopieren."
@@ -266,7 +265,7 @@ class PSAVehicle extends IPSModule
                         [
                             "type"    => "Button",
                             "label"   => "Code einfügen & tauschen",
-                            "onClick" => "PSAVehicle_ActionSubmitOAuthCode($id);"
+                            "onClick" => 'PSAVehicle_ActionSubmitOAuthCode($id);'
                         ]
                     ]
                 ],
