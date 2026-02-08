@@ -2133,9 +2133,8 @@ class PSAVehicle extends IPSModule
             'peugeot'  => 'mymap',
             'vauxhall' => 'mymvxsdk',
             'ds'       => 'mymdssdk',
-            // Ergänze bei Bedarf:
-            // 'citroen'  => 'mycitroensdk',
-            // 'opel'     => 'myopelsdk',
+            'citroen'  => 'mycitroensdk',
+            'opel'     => 'myopelsdk',
         ];
 
         if (!isset($map[$brand])) {
