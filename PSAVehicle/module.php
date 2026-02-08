@@ -1631,15 +1631,18 @@ class PSAVehicle extends IPSModule
                 };
 
                 // Huffman-Dekoder (Bit‑Reader + Decodierbäume)
-                $decodeSym = function($tab) use ($br) {
-                    // Canonical Huffman: wir halten für jede Länge min/max Code u. Startindex
-                    // $tab = ['limit'=>[], 'base'=>[], 'perm'=>[], 'minLen'=>int, 'maxLen'=>int]
+                $decodeSym = function(array $tab) use ($br) {
                     $code = 0;
-                    for ($len=$tab['minLen']; $len<=$tab['maxLen']; $len++) {
-                        $code = ($code<<1) | $br->readBits(1);
-                        if ($code <= $tab['limit'][$len]) {
-                            $idx = $tab['base'][$len] + ($code - $tab['basecode'][$len]);
-                            return $tab['perm'][$idx];
+                    for ($l = $tab['minLen']; $l <= $tab['maxLen']; $l++) {
+                        $bit = $br->readBits(1);
+                        if ($bit === null) return null;
+                        $code = ($code << 1) | $bit;
+
+                        // Prüfen, ob der Code in den Bereich dieser Länge fällt:
+                        if ($code <= $tab['limit'][$l]) {
+                            // Position im perm-Array: base[len] + (code - firstCode[len])
+                            $idx = $tab['base'][$l] + ($code - $tab['firstCode'][$l]);
+                            return $tab['perm'][$idx] ?? null;
                         }
                     }
                     return null;
@@ -1753,55 +1756,72 @@ class PSAVehicle extends IPSModule
     }
 
     /**
-     * Hilfsfunktion: Canonical-Huffman-Tabelle aus Längen bauen.
-     * Rückgabe-Layout kompatibel zur Ad-hoc-Decodierung oben.
+     * Baut eine canonical Huffman-Tabelle aus Code-Längen (<= 20 Bit).
+     * Rückgabe:
+     *  [
+     *    'minLen'=>int, 'maxLen'=>int,
+     *    'limit'=>array(len=>code_max),
+     *    'base' =>array(len=>start_index_im_perm),
+     *    'perm' =>array(index=>symbol),
+     *    'firstCode'=>array(len=>erster_code_mit_dieser_laenge)
+     *  ]
+     * Referenzprinzip: wie in Go compress/bzip2 und micro-bunzip (canonical codes).
+     * [1](https://community.openhab.org/t/groupe-psa-cars-binding-peugeot-citroen-ds-opel-vauxhall/110580?page=5)
      */
     private function buildHuffmanTable(array $lengths, int $alphaSize): ?array
     {
+        // 1) min/max und Häufigkeiten pro Länge
         $minLen = PHP_INT_MAX; $maxLen = 0;
-        $countPerLen = [];
-        for ($i=0;$i<$alphaSize;$i++) {
-            $l = $lengths[$i];
-            if ($l<=0) continue;
-            if (!isset($countPerLen[$l])) $countPerLen[$l] = 0;
-            $countPerLen[$l]++;
+        $count = array_fill(0, 23, 0); // bis 22 Bits Reserve
+        for ($i=0; $i<$alphaSize; $i++) {
+            $l = (int)$lengths[$i];
+            if ($l <= 0) continue;
             if ($l < $minLen) $minLen = $l;
             if ($l > $maxLen) $maxLen = $l;
+            $count[$l]++;
         }
-        if ($minLen === PHP_INT_MAX) return null;
+        if ($minLen === PHP_INT_MAX) return null; // keine Symbole
 
-        $base = []; $limit = []; $basecode = [];
+        // 2) perm: Symbole sortiert nach Code-Länge (stabil)
+        $perm = [];
+        for ($l=$minLen; $l<=$maxLen; $l++) {
+            for ($sym=0; $sym<$alphaSize; $sym++) {
+                if ((int)$lengths[$sym] === $l) $perm[] = $sym;
+            }
+        }
+
+        // 3) firstCode & limit (oberer Code je Länge), base (Startindex in perm)
+        // canonical: firstCode[len] = ( (firstCode[len-1] + count[len-1]) << 1 )
+        $firstCode = array_fill(0, $maxLen+1, 0);
+        $limit     = array_fill(0, $maxLen+1, -1);
+        $base      = array_fill(0, $maxLen+1, 0);
+
         $code = 0;
         for ($l=$minLen; $l<=$maxLen; $l++) {
-            $cnt = $countPerLen[$l] ?? 0;
-            $base[$l] = $code;
-            $code = ($code + $cnt) << 1;
+            $firstCode[$l] = $code;
+            $code = ($code + $count[$l]) << 1;
         }
         $code = 0;
         for ($l=$minLen; $l<=$maxLen; $l++) {
-            $cnt = $countPerLen[$l] ?? 0;
-            $code = ($code + $cnt);
+            $code += $count[$l];
             $limit[$l] = ($code - 1);
             $code <<= 1;
         }
-        // Permutations-Array (Symbolreihenfolge nach Längen sortiert)
-        $perm = [];
+
+        // base[len] = Startindex im perm für Codes dieser Länge
+        $sum = 0;
         for ($l=$minLen; $l<=$maxLen; $l++) {
-            for ($i=0;$i<$alphaSize;$i++) {
-                if ($lengths[$i] === $l) $perm[] = $i;
-            }
-        }
-        // basecode[l] = erster Codewert der Länge l
-        $basecode = [];
-        $codeVal = 0;
-        for ($l=$minLen; $l<=$maxLen; $l++) {
-            $basecode[$l] = $codeVal;
-            $codeVal = ($limit[$l] + 1) << 1;
+            $base[$l] = $sum;
+            $sum += $count[$l];
         }
 
         return [
-            'minLen'=>$minLen, 'maxLen'=>$maxLen,
-            'base'=>$base, 'limit'=>$limit, 'perm'=>$perm, 'basecode'=>$basecode
+            'minLen'=>$minLen,
+            'maxLen'=>$maxLen,
+            'limit' =>$limit,
+            'base'  =>$base,
+            'perm'  =>$perm,
+            'firstCode'=>$firstCode
         ];
-    }    
+    }  
 }
