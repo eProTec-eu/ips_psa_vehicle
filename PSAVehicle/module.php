@@ -2080,7 +2080,7 @@ class PSAVehicle extends IPSModule
         // 2) Properties
         $authUrlBase = rtrim($this->ReadPropertyString("AuthURL"), '/'); // z.B. .../am/oauth2/authorize
         $clientId    = $this->ReadPropertyString("ClientID");
-        $redirectUri = $this->ReadPropertyString("RedirectUri"); // z.B. mycitroensdk://oauth2redirect/de
+        $redirectUri = $this->ReadPropertyString("RedirectURI"); // z.B. mycitroensdk://oauth2redirect/de
         $scope       = "openid profile";
 
         // 3) Query korrekt kodieren (inkl. redirect_uri & scope)
