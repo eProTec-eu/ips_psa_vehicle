@@ -2238,14 +2238,14 @@ class PSAVehicle extends IPSModule
         if (!isset($cultures[$countryProp]['languages'][0])) {
             throw new \RuntimeException("Kein Culture-Mapping für Land '$countryProp' in cultures.json.");
         }
-        $culture = $cultures[$countryProp]['languages'][0]; // z.B. de_DE
+        $culture = $cultures[$countryProp]['languages'][0]; // z.B. de_DE*/
+        //NUR ZUM TESTEN!!!
+        $culture = "de_DE";
         $parts = explode('_', $culture);
         if (count($parts) !== 2) {
             throw new \RuntimeException("Unerwartetes Culture-Format: $culture");
         }
-        [$lang, $COUNTRY] = $parts; // de, DE*/
-        //NUR zum TESTEN
-        $culture = "de_DE";
+        [$lang, $COUNTRY] = $parts; // de, DE
 
         // 3) parameters.json lesen
         $parametersPath = sprintf('res/raw-%s-r%s/parameters.json', strtolower($lang), strtoupper($COUNTRY));
