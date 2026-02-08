@@ -1613,18 +1613,37 @@ class PSAVehicle extends IPSModule
                     }
                 }
 
-                // --- Entropie-Dekodierung über Selector-Gruppen (je 50 Symbole)
-                $RUNA = 0; 
+                // --- Entropie-Dekodierung (Huffman + RUNA/RUNB + MTF), gruppenweise nach Selectors (50er-Takt)
+                $RUNA = 0;
                 $RUNB = 1;
-                $eob  = $alphaSize - 1;
+                $alphaSize = $nInUse + 2;        // bereits oben bestimmt
+                $eob  = $alphaSize - 1;          // End-of-block-Symbol
 
-                $groupIndex = 0;     // Index in $selectors
-                $remain     = 0;     // verbleibende Decodes mit aktueller Gruppe (50 → 0)
-                $currTable  = null;  // aktuell aktive Huffman-Tabelle
+                // 1) Canonical-Huffman: Symbol-Decoder (Bits → Symbol)
+                //    (muss VOR $getSym definiert sein!)
+                $decodeSym = function(array $tab) use ($br) {
+                    // $tab: ['minLen','maxLen','limit','base','perm','firstCode']
+                    $code = 0;
+                    for ($l = $tab['minLen']; $l <= $tab['maxLen']; $l++) {
+                        $bit = $br->readBits(1);
+                        if ($bit === null) return null;
+                        $code = ($code << 1) | $bit;
+                        if ($code <= $tab['limit'][$l]) {
+                            $idx = $tab['base'][$l] + ($code - $tab['firstCode'][$l]);
+                            return $tab['perm'][$idx] ?? null;
+                        }
+                    }
+                    return null;
+                };
+
+                // 2) 50er‑Takt je Selector‑Gruppe
+                $groupIndex = 0;       // welcher Selector ist aktiv
+                $remain     = 0;       // verbleibende Dekodierungen in der aktuellen Gruppe (0 → neue Gruppe)
+                $currTable  = null;    // aktuell aktive Huffman-Tabelle
 
                 $nextTable = function() use (&$groupIndex, &$remain, &$currTable, $selectors, $tables, $nSelectors) {
                     if ($remain === 0) {
-                        if ($groupIndex >= $nSelectors) return false;  // Schutz
+                        if ($groupIndex >= $nSelectors) return false; // Schutz (inkonsistente Daten)
                         $currTable = $tables[$selectors[$groupIndex]];
                         $groupIndex++;
                         $remain = 50;
@@ -1633,27 +1652,30 @@ class PSAVehicle extends IPSModule
                     return true;
                 };
 
-                $symbols = [];
-                $nsym    = 0;
-
-                // Hilfsfunktion: EIN Symbol mit aktueller Tabelle dekodieren
+                // 3) EIN Symbol holen (unter Beachtung des 50er‑Takts)
                 $getSym = function() use (&$currTable, $nextTable, $decodeSym) {
                     if (!$nextTable()) return null;
                     return $decodeSym($currTable);
                 };
 
-                // Hauptschleife: solange bis EOB
+                // 4) Hauptschleife: Symbole bis EOB sammeln
+                $symbols = [];
+                $nsym    = 0;
+
+                // MTF‑Arbeitsliste (yy) ist bereits aus $seqToUnseq aufgebaut
+                // --> $yy = $seqToUnseq;
+
                 while (true) {
-                    // Erstes Symbol des (Teil-)Zyklus holen
+                    // Erstes Symbol holen
                     $sym = $getSym();
                     if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: Huffman decode fail (initial)"); return false; }
 
                     if ($sym === $eob) {
-                        break; // Block-Ende
+                        break; // Blockende
                     }
 
                     if ($sym === $RUNA || $sym === $RUNB) {
-                        // ---- RUN-Dekodierung (bzip2: binärer Zähler)
+                        // ---- RUN-Dekodierung (bzip2: binärer Zähler; Start r=-1, am Ende r+1)
                         $r = -1;
                         $n = 1;
                         do {
@@ -1665,31 +1687,31 @@ class PSAVehicle extends IPSModule
                             if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: RUN decode fail"); return false; }
                         } while ($sym === $RUNA || $sym === $RUNB);
 
-                        // Lauflänge ausgeben (vorderstes MTF-Byte wiederholen)
                         $runCount = $r + 1;
-                        $c = $yy[0];
-                        for ($k = 0; $k < $runCount; $k++) $symbols[$nsym++] = $c;
+                        $c = $yy[0];                          // vorderstes MTF‑Byte
+                        for ($k=0; $k<$runCount; $k++) {
+                            $symbols[$nsym++] = $c;
+                        }
 
-                        // WICHTIG: $sym ist hier bereits das NÄCHSTE Symbol nach der RUN-Sequenz:
-                        if ($sym === $eob) break;
-
-                        // ... und fällt JETZT in die Normalsymbol-Verarbeitung unten
+                        if ($sym === $eob) break;             // genau am Blockende
+                        // WICHTIG: $sym ist bereits das nächste „echte“ Symbol → unten verarbeiten
                     }
 
                     if ($sym !== $RUNA && $sym !== $RUNB) {
-                        // ---- Normalsymbol: MTF-Index (sym-1)
+                        // ---- Normalsymbol: MTF‑Index (sym-1)
                         $j = $sym - 1;
-                        if (!isset($yy[$j])) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: MTF-Index out of range"); return false; }
+                        if (!isset($yy[$j])) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: MTF-Index out of range ({$j})"); return false; }
                         $c = $yy[$j];
 
-                        // Move-to-front
+                        // Move‑to‑front
                         array_splice($yy, $j, 1);
                         array_unshift($yy, $c);
 
                         $symbols[$nsym++] = $c;
-                        // Nächste Iteration liest ein NEUES Symbol (getSym() oben)
+                        // nächste Iteration holt ein NEUES Symbol via $getSym()
                     }
                 }
+                // --- (Hier geht's weiter mit inverse BWT / TT‑Aufbau)
 
                 // --- Inverse BWT mit origPtr
                 // Erzeuge Tally über 0..255
