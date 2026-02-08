@@ -514,6 +514,28 @@ class PSAVehicle extends IPSModule
         // (Optional) falls du eigenes CA-Bundle hast:
         // IPS_SetProperty($this->InstanceID, "CAPath", "/etc/ssl/certs/ca-bundle.crt");
 
+        // weitere Daten aus der APK laden
+        try {
+            $data = $this->ExtractAppDataFromApkExternal($apkPath, $country);
+
+            IPS_LogMessage("PSAVehicle", "ClientId = "     . $data["clientId"]);
+            IPS_LogMessage("PSAVehicle", "ClientSecret = " . $data["clientSecret"]);
+            IPS_LogMessage("PSAVehicle", "RedirectUri = "  . $data["redirectUri"]);
+            IPS_LogMessage("PSAVehicle", "Brand = "        . $data["brand"]);
+
+            IPS_SetProperty($this->InstanceID, "ClientID",     $data["clientId"]);
+            IPS_SetProperty($this->InstanceID, "ClientSecret", $data["clientSecret"]);
+
+            if ($data["redirectUri"] !== "") {
+                IPS_SetProperty($this->InstanceID, "RedirectURI", $data["redirectUri"]);
+            }
+
+            //IPS_ApplyChanges($this->InstanceID);
+
+        } catch (Exception $e) {
+            IPS_LogMessage("PSAVehicle", "APK-Analyse: " . $e->getMessage());
+        }
+
         // (Optional) gleich Marken-Auth/Token/Device-URL & Realm setzen
         $this->AutoSetAuthFromVin();
 
@@ -1251,8 +1273,8 @@ class PSAVehicle extends IPSModule
         $deviceUrl = "https://{$host}/am/oauth2/device/code"; // ggf. anpassen, falls abweichend
 
         // RedirectURI ermitteln aus Ländercode und Brand
-        $country = $this->ReadPropertyString("Country");
-        $this->autoSetRedirectUriFromBrand($brand, $country);
+        //$country = $this->ReadPropertyString("Country");
+        //$this->autoSetRedirectUriFromBrand($brand, $country);
 
         IPS_SetProperty($this->InstanceID, "AuthURL",  $authUrl);
         IPS_SetProperty($this->InstanceID, "TokenURL", $tokenUrl);
@@ -2150,4 +2172,118 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "RedirectUri gesetzt: {$uri}");
         return true;
     }    
+    /**
+     * Liest cultures.json und parameters.json aus der APK ohne ZipArchive,
+     * indem externe Tools (unzip/busybox/7z) streamend genutzt werden.
+     * Liefert clientId, clientSecret, redirectUri, brand, culture.
+     */
+    private function ExtractAppDataFromApkExternal(string $apkPath, string $countryFallback = 'de'): array
+    {
+        $apkPath = trim($apkPath);
+        if ($apkPath === '' || !is_file($apkPath)) {
+            throw new \RuntimeException("APK nicht gefunden: $apkPath");
+        }
+
+        // 1) Best verfügbares Tool finden
+        $which = function(string $cmd): string {
+            $out = trim(shell_exec('command -v '.escapeshellarg($cmd).' 2>/dev/null') ?? '');
+            return $out;
+        };
+        $binUnzip   = $which('unzip');          // bevorzugt
+        $binBusybox = $which('busybox');        // busybox unzip
+        $bin7z      = $which('7z');             // p7zip-full
+
+        $readEntry = function(string $entry) use ($apkPath, $binUnzip, $binBusybox, $bin7z): string {
+            $data = '';
+            if ($binUnzip !== '') {
+                // unzip -p <apk> <entry>
+                $cmd = escapeshellcmd($binUnzip).' -p '.escapeshellarg($apkPath).' '.escapeshellarg($entry).' 2>/dev/null';
+                $data = shell_exec($cmd) ?? '';
+                if ($data !== '') return $data;
+            }
+            if ($binBusybox !== '') {
+                // busybox unzip -p <apk> <entry>
+                $cmd = escapeshellcmd($binBusybox).' unzip -p '.escapeshellarg($apkPath).' '.escapeshellarg($entry).' 2>/dev/null';
+                $data = shell_exec($cmd) ?? '';
+                if ($data !== '') return $data;
+            }
+            if ($bin7z !== '') {
+                // 7z x -so -y <apk> <entry>
+                $cmd = escapeshellcmd($bin7z).' x -so -y '.escapeshellarg($apkPath).' '.escapeshellarg($entry).' 2>/dev/null';
+                $data = shell_exec($cmd) ?? '';
+                if ($data !== '') return $data;
+            }
+            return '';
+        };
+
+        // 2) cultures.json lesen → culture bestimmen
+        $culturesJson = $readEntry('res/raw/cultures.json');
+        if ($culturesJson === '') {
+            throw new \RuntimeException("res/raw/cultures.json konnte nicht gelesen werden (unzip/busybox/7z nicht verfügbar oder Eintrag fehlt).");
+        }
+        $cultures = json_decode($culturesJson, true);
+        if (!is_array($cultures)) {
+            throw new \RuntimeException("cultures.json ist ungültig (kein JSON).");
+        }
+
+        $countryProp = strtolower(trim($this->ReadPropertyString('CountryCode') ?: $countryFallback));
+        if ($countryProp === '') $countryProp = 'de';
+        if (!isset($cultures[$countryProp]['languages'][0])) {
+            throw new \RuntimeException("Kein Culture-Mapping für Land '$countryProp' in cultures.json.");
+        }
+        $culture = $cultures[$countryProp]['languages'][0]; // z.B. de_DE
+        $parts = explode('_', $culture);
+        if (count($parts) !== 2) {
+            throw new \RuntimeException("Unerwartetes Culture-Format: $culture");
+        }
+        [$lang, $COUNTRY] = $parts; // de, DE
+
+        // 3) parameters.json lesen
+        $parametersPath = sprintf('res/raw-%s-r%s/parameters.json', strtolower($lang), strtoupper($COUNTRY));
+        $parametersJson = $readEntry($parametersPath);
+        if ($parametersJson === '') {
+            throw new \RuntimeException("parameters.json nicht gefunden: $parametersPath");
+        }
+        $parameters = json_decode($parametersJson, true);
+        if (!is_array($parameters)) {
+            throw new \RuntimeException("parameters.json ist ungültig (kein JSON).");
+        }
+
+        $clientId     = trim((string)($parameters['cvsClientId'] ?? ''));
+        $clientSecret = trim((string)($parameters['cvsSecret']   ?? ''));
+        if ($clientId === '' || $clientSecret === '') {
+            throw new \RuntimeException("ClientId/ClientSecret fehlen in parameters.json.");
+        }
+
+        // 4) Marke heuristisch aus Dateiname ableiten (ausreichend für Redirect-Scheme)
+        $fn = strtolower(basename($apkPath));
+        $brand = 'unknown';
+        if (str_contains($fn, 'citroen'))  $brand = 'citroen';
+        elseif (str_contains($fn, 'peugeot')) $brand = 'peugeot';
+        elseif (str_contains($fn, 'vauxhall')) $brand = 'vauxhall';
+        elseif (str_contains($fn, 'opel'))     $brand = 'opel';
+        elseif (str_contains($fn, 'ds'))       $brand = 'ds';
+
+        // 5) RedirectUri nach Marke
+        $schemeMap = [
+            'citroen'  => 'mycitroensdk',
+            'peugeot'  => 'mymap',
+            'vauxhall' => 'mymvxsdk',
+            'opel'     => 'myopelsdk',
+            'ds'       => 'mymdssdk',
+        ];
+        $redirectUri = isset($schemeMap[$brand])
+            ? sprintf('%s://oauth2redirect/%s', $schemeMap[$brand], strtolower($COUNTRY))
+            : '';
+
+        return [
+            'clientId'     => $clientId,
+            'clientSecret' => $clientSecret,
+            'redirectUri'  => $redirectUri,
+            'brand'        => $brand,
+            'culture'      => $culture,
+            'country'      => strtolower($COUNTRY),
+            'parameters'   => $parameters,
+        ];
+    }  
 }
