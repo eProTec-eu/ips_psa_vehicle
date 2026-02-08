@@ -1252,7 +1252,7 @@ class PSAVehicle extends IPSModule
         $deviceUrl = "https://{$host}/am/oauth2/device/code"; // ggf. anpassen, falls abweichend
 
         // RedirectURI ermitteln aus Ländercode und Brand
-        $country = $this->ReadPropertyString("Country"));
+        $country = $this->ReadPropertyString("Country");
         $this->autoSetRedirectUriFromBrand(string $brand, string $country);
 
         IPS_SetProperty($this->InstanceID, "AuthURL",  $authUrl);
