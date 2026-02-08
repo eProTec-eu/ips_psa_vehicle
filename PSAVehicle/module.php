@@ -2232,7 +2232,7 @@ class PSAVehicle extends IPSModule
             throw new \RuntimeException("cultures.json ist ungültig (kein JSON).");
         }
 
-        $countryProp = strtolower(trim($this->ReadPropertyString('CountryCode') ?: $countryFallback));
+        $countryProp = strtolower(trim($this->ReadPropertyString('Country') ?: $countryFallback));
         if ($countryProp === '') $countryProp = 'de';
         if (!isset($cultures[$countryProp]['languages'][0])) {
             throw new \RuntimeException("Kein Culture-Mapping für Land '$countryProp' in cultures.json.");
