@@ -2028,7 +2028,7 @@ class PSAVehicle extends IPSModule
         }
         $zip->close();
     }    
-    public function ActionGenerateAuthorizeUrl(): void
+    /*public function ActionGenerateAuthorizeUrl(): void
     {
         // 1) PKCE: code_verifier + code_challenge (S256)
         $verifier  = $this->pkceGenerateVerifier();             // ~43-128 chars
@@ -2067,6 +2067,44 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "Authorize URL (encoded): ".$encoded);
         IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): ".$decoded);
         // Der manuelle Flow (URL im Browser öffnen → F12/Network → code in Location) folgt #779. 
+    }*/
+    public function ActionGenerateAuthorizeUrl(): void
+    {
+        // 1) PKCE
+        $verifier  = $this->pkceGenerateVerifier();
+        $challenge = $this->pkceChallengeS256($verifier);
+        $state     = bin2hex(random_bytes(16));
+        $this->SetBuffer("pkce_verifier", $verifier);
+        $this->SetBuffer("oauth_state",   $state);
+
+        // 2) Properties
+        $authUrlBase = rtrim($this->ReadPropertyString("AuthURL"), '/'); // z.B. .../am/oauth2/authorize
+        $clientId    = $this->ReadPropertyString("ClientId");
+        $redirectUri = $this->ReadPropertyString("RedirectUri"); // z.B. mycitroensdk://oauth2redirect/de
+        $scope       = "openid profile";
+
+        // 3) Query korrekt kodieren (inkl. redirect_uri & scope)
+        $q = http_build_query([
+            'client_id'             => $clientId,
+            'redirect_uri'          => $redirectUri,   // http_build_query kodiert korrekt
+            'response_type'         => 'code',
+            'scope'                 => $scope,         // -> openid%20profile
+            'state'                 => $state,
+            'code_challenge'        => $challenge,
+            'code_challenge_method' => 'S256'
+        ], '', '&', PHP_QUERY_RFC3986);
+
+        // 4) WICHTIG: AuthURL ist bereits /authorize → NICHT noch einmal /authorize anhängen!
+        $authorizeUrl = $authUrlBase . '?' . $q;
+
+        // Anzeige: dekodiert nur für die UI (Kopie), der echte Browser-Link soll encoded bleiben
+        $decoded = $authUrlBase . '?' . urldecode($q);
+
+        IPS_SetProperty($this->InstanceID, "AuthorizeUrlDecoded", $decoded);
+        IPS_ApplyChanges($this->InstanceID);
+
+        IPS_LogMessage("PSAVehicle", "Authorize URL (encoded): " . $authorizeUrl);
+        IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): " . $decoded);
     }
 
     private function pkceGenerateVerifier(): string
