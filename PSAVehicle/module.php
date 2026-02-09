@@ -68,7 +68,8 @@ class PSAVehicle extends IPSModule
         $showKey = ($certType === 'PEM_GETRENNT');
         $showKeyPwd = ($certType !== 'P12');
         $showCertPwd = ($certType === 'P12' || $certType === 'PEM_COMBINED');
-
+        $hasUrl = ($this->GetBuffer("authorize_url_encoded") !== '');
+        
         $form = [
             "elements" => [
                 // Allgemein
@@ -223,7 +224,6 @@ class PSAVehicle extends IPSModule
                 ], 
                 
                 // OAuth2 (manuelle Verbindung)
-                $hasUrl = ($this->GetBuffer("authorize_url_encoded") !== '');
                 [
                     "type"    => "ExpansionPanel",
                     "caption" => "OAuth2 (manuelle Verbindung)",
