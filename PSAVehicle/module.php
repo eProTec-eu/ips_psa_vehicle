@@ -2155,7 +2155,7 @@ class PSAVehicle extends IPSModule
         //DEBUG
         IPS_LogMessage("PSAVehicle", "TOKEN-URL: " . $tokenUrl);
         IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " . $redirect);
-        IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " . $clientId);
+        IPS_LogMessage("PSAVehicle", "ClientID im Token-Request: " . $clientId);
 
         $post = [
             'grant_type'    => 'authorization_code',
@@ -2360,6 +2360,12 @@ class PSAVehicle extends IPSModule
 
         // 9) Redirect-Scheme dynamisch aus APK extrahieren (Manifest/DEX Stringscan)
         $scheme = $this->detectRedirectSchemeFromApkFast($files, $readEntry);
+        
+        // Kurzform aus dem Manifest → auf SDK-Scheme mappen
+        if ($scheme === 'mymac') {
+            $scheme = 'mymacsdk';
+        }
+
         if ($scheme === null) {
             // Marken-Fallback, falls wirklich nichts gefunden
             $schemeMap = [
