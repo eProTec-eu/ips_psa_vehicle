@@ -2168,7 +2168,7 @@ class PSAVehicle extends IPSModule
         $resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
         
         //DEBUG
-        IPS_LogMessage("PSAVehicle", "Token-ResponseRaw: " . $resp);
+        //IPS_LogMessage("PSAVehicle", "Token-ResponseRaw: " . $resp);
 
         if (!$resp['ok']) {
             IPS_LogMessage("PSAVehicle","OAuth: Token-Anforderung fehlgeschlagen: HTTP ".$resp['http']." | ".$resp['body']);
@@ -2212,6 +2212,7 @@ class PSAVehicle extends IPSModule
         //DEBUG
         IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
         IPS_LogMessage("PSAVehicle", "cURL: " . $err);
+        IPS_LogMessage("PSAVehicle", "Body: " . $body);
 
         curl_close($ch);
         return ['ok' => ($body !== false && $http >= 200 && $http < 300), 'body' => $body ?: $err, 'http' => $http];
