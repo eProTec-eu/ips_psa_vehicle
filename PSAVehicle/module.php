@@ -2154,8 +2154,8 @@ class PSAVehicle extends IPSModule
 
         //DEBUG
         IPS_LogMessage("PSAVehicle", "TOKEN-URL: " . $tokenUrl);
-        IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " $redirect);
-        IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " $clientId);
+        IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " . $redirect);
+        IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " . $clientId);
 
         $post = [
             'grant_type'    => 'authorization_code',
