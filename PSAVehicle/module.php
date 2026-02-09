@@ -532,6 +532,8 @@ class PSAVehicle extends IPSModule
                 $countryFallback = 'de';
             }
 
+            $files = $this->apkListEntries($apkPath);
+
             $data = $this->ExtractAppDataFromApkExternal($apkPath, $countryFallback);
 
             IPS_LogMessage("PSAVehicle", "ClientId = "     . $data["clientId"]);
@@ -2307,6 +2309,7 @@ class PSAVehicle extends IPSModule
             throw new \RuntimeException("parameters.json nicht gefunden: $parametersPath");
         }*/
         // Alle möglichen parameters.json Einträge suchen und den ersten gültigen nehmen:
+
         $entries = [
             'res/raw/parameters.json',
             'res/raw-de/parameters.json',
@@ -2395,6 +2398,7 @@ class PSAVehicle extends IPSModule
                 // Zeilen mit Größe/Datum/Name: ... <size> <date> <time> <name>
                 if (preg_match('/^\s*\d+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+(.+)$/', $ln, $m)) {
                     $files[] = $m[1];
+                    IPS_LogMessage("PSAVehicle", "apkListEntries: {$m[1]}");
                 }
             }
             return $files;
