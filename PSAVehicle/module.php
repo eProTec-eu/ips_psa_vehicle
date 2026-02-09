@@ -2207,7 +2207,7 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle","OAuth: Token gespeichert. Expires_in=".($json['expires_in'] ?? 'n/a'));
         return true;
     }
-
+/*
     private function curlPostForm(string $url, array $fields, string $certPem = null, string $keyPem = null): array
     {
         $ch = curl_init($url);
@@ -2238,7 +2238,63 @@ class PSAVehicle extends IPSModule
 
         curl_close($ch);
         return ['ok' => ($body !== false && $http >= 200 && $http < 300), 'body' => $body ?: $err, 'http' => $http];
-    }    
+    } */
+   
+    private function curlPostForm(
+        string $url,
+        array $fields,
+        bool $useMtls = false,
+        ?string $certPem = null,
+        ?string $keyPem  = null,
+        ?string $caInfo  = null
+    ): array
+    {
+        // x-www-form-urlencoded – wichtig: RFC3986 (kein '+' für Leerzeichen)
+        $postFields = http_build_query($fields, '', '&', PHP_QUERY_RFC3986);
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $postFields,
+            CURLOPT_HTTPHEADER     => [
+                'Content-Type: application/x-www-form-urlencoded',
+                'Accept: application/json'
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
+            // CA-Store setzen (Linux). Unter Windows z.B. __DIR__ . '/cacert.pem'
+            CURLOPT_CAINFO         => $caInfo ?: '/etc/ssl/certs/ca-certificates.crt',
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+
+        // mTLS NUR wenn explizit erlaubt – niemals für /am/oauth2/access_token!
+        if ($useMtls) {
+            if (!$certPem || !$keyPem) {
+                curl_close($ch);
+                return ['ok' => false, 'body' => 'mTLS aktiviert, aber Zertifikat/Key fehlen', 'http' => 0];
+            }
+            curl_setopt($ch, CURLOPT_SSLCERT, $certPem);
+            curl_setopt($ch, CURLOPT_SSLKEY,  $keyPem);
+        }
+
+        $body = curl_exec($ch);
+        $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        $eno  = curl_errno($ch);
+        curl_close($ch);
+
+        // Logging – achte darauf, keine Secrets zu loggen
+        IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
+        IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== '' ? $err . " (errno $eno)" : 'OK'));
+        IPS_LogMessage("PSAVehicle", "Body: " . (is_string($body) ? substr($body, 0, 600) : 'kein String'));
+
+        return [
+            'ok'   => ($body !== false && $http >= 200 && $http < 300),
+            'body' => $body !== false ? $body : $err,
+            'http' => $http
+        ];
+    }        
 
     private function autoSetRedirectUriFromBrand(string $brand, string $country): bool
     {
