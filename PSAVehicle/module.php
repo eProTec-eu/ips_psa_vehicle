@@ -69,7 +69,7 @@ class PSAVehicle extends IPSModule
         $showKeyPwd = ($certType !== 'P12');
         $showCertPwd = ($certType === 'P12' || $certType === 'PEM_COMBINED');
         $hasUrl = ($this->GetBuffer("authorize_url_encoded") !== '');
-        
+
         $form = [
             "elements" => [
                 // Allgemein
@@ -2466,6 +2466,6 @@ class PSAVehicle extends IPSModule
         // Rückgabe muss http/https sein, damit nicht nur ein Dialog erscheint.
         return "https://";
     }
-    return $url;
+    return rawurlencode($url);
     }
 }
