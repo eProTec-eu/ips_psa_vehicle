@@ -2174,6 +2174,12 @@ class PSAVehicle extends IPSModule
             'code_verifier' => $verifier
         ];
 
+        //$verifier  = $this->ReadAttributeString('PkceVerifier'); // sollte "42-temY..." sein
+        $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+
+        IPS_LogMessage('PSAVehicle', 'DEBUG PKCE: computed_challenge=' . $challenge);
+        //IPS_LogMessage('PSAVehicle', 'DEBUG PKCE: authorize_challenge=' . $this->ReadAttributeString('PkceChallenge'));
+
         //$resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
         $resp = $this->curlPostForm($tokenUrl, $post);
         
@@ -2208,9 +2214,12 @@ class PSAVehicle extends IPSModule
         curl_setopt_array($ch, [
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => http_build_query($fields, '', '&', PHP_QUERY_RFC3986),
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded', 'Accept: application/json'],
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 25,
-            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_CAINFO         => '/etc/ssl/certs/ca-certificates.crt', // Windows: __DIR__.'/cacert.pem'
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
         ]);
         // mTLS mit deinem PSA-Client-Zertifikat (aus APK)
         if ($certPem && $keyPem) {
