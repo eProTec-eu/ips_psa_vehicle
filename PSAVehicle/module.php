@@ -2152,6 +2152,11 @@ class PSAVehicle extends IPSModule
         $certPath   = $this->ReadPropertyString("CertPath"); // mTLS (Client-Zertifikat)
         $keyPath    = $this->ReadPropertyString("KeyPath");
 
+        //DEBUG
+        IPS_LogMessage("PSAVehicle", "TOKEN-URL: " . $tokenUrl);
+        IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " $redirect);
+        IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " $clientId);
+
         $post = [
             'grant_type'    => 'authorization_code',
             'code'          => $code,
@@ -2161,6 +2166,10 @@ class PSAVehicle extends IPSModule
         ];
 
         $resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
+        
+        //DEBUG
+        IPS_LogMessage("PSAVehicle", "Token-ResponseRaw: " . $resp);
+
         if (!$resp['ok']) {
             IPS_LogMessage("PSAVehicle","OAuth: Token-Anforderung fehlgeschlagen: HTTP ".$resp['http']." | ".$resp['body']);
             return false;
@@ -2199,6 +2208,11 @@ class PSAVehicle extends IPSModule
         $body = curl_exec($ch);
         $http = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
         $err  = curl_error($ch);
+        
+        //DEBUG
+        IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
+        IPS_LogMessage("PSAVehicle", "cURL: " . $err);
+
         curl_close($ch);
         return ['ok' => ($body !== false && $http >= 200 && $http < 300), 'body' => $body ?: $err, 'http' => $http];
     }    
