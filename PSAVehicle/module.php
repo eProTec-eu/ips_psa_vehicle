@@ -2602,44 +2602,56 @@ class PSAVehicle extends IPSModule
      */
     private function detectRedirectSchemeFromApkFast(array $files, callable $readEntry): ?string
     {
-        // 1) Primärquellen: Manifest & DEX-Dateien
-        $names = [];
-        if (in_array('AndroidManifest.xml', $files, true)) {
-            $names[] = 'AndroidManifest.xml';
-        }
-        foreach ($files as $f) {
-            if (preg_match('~^classes(\d*)\.dex$~i', basename($f))) {
-                $names[] = $f;
+        // mögliche Schemes in Stellantis APKs
+        $schemes = [
+            'mymacsdk',       // neues Citroën Scheme (Bestätigung aus Manifest)
+            'mycitroensdk',   // alt
+            'mymapsdk',       // Peugeot
+            'myopelsdk',      // Opel
+            'mymdssdk',       // DS
+            'mymvxsdk',       // Vauxhall
+            'mymac',          // kurzer Stringpool-Eintrag Citroën
+        ];
+
+        // 1) Alle APK-Dateien durchsuchen (auch binäre)
+        foreach ($files as $file) {
+
+            // nur die relevanten großen Dateien zuerst (Performance)
+            if (!preg_match('~(AndroidManifest\.xml|\.dex|resources\.arsc|\.xml|manifest)~i', basename($file))) {
+                continue;
             }
-        }
-        // Sicherheitsnetz: keine Primärtitel? Dann alles durchsuchen (kann langsam sein)
-        if (empty($names)) $names = $files;
 
-        // Regex sucht direkt URIs inkl. Scheme + Country
-        $re = '/([a-z0-9]+):\/\/oauth2redirect\/([a-z]{2})/i';
+            $buf = $readEntry($file);
+            if ($buf === '' || $buf === null) {
+                continue;
+            }
 
-        foreach ($names as $name) {
-            $buf = $readEntry($name);
-            if ($buf === '') continue;
-
-            if (preg_match($re, $buf, $m)) {
-                // Volle URI gefunden -> Scheme extrahieren
+            // Vollständige Redirect-URI suchen
+            if (preg_match('/([a-z0-9]+):\/\/oauth2redirect\/([a-z]{2})/i', $buf, $m)) {
                 return strtolower($m[1]);
             }
-        }
 
-        // 2) Falls keine vollständige URI gefunden: nach bekannten Schemes suchen
-        $known = ['mymacsdk','mycitroensdk','mymapsdk','myopelsdk','mymdssdk','mymvxsdk'];
-        foreach ($names as $name) {
-            $buf = $readEntry($name);
-            if ($buf === '') continue;
-            foreach ($known as $k) {
-                if (strpos($buf, $k) !== false) {
-                    return $k;
+            // sonst nach bekannten Schemes suchen
+            foreach ($schemes as $s) {
+                if (stripos($buf, $s) !== false) {
+                    return strtolower($s);
                 }
             }
         }
 
+        // 2) Wenn nichts in den "wichtigen" Dateien gefunden wurde – alle Dateien durchsuchen
+        foreach ($files as $file) {
+            $buf = $readEntry($file);
+            if ($buf === '' || $buf === null) continue;
+
+            foreach ($schemes as $s) {
+                if (stripos($buf, $s) !== false) {
+                    return strtolower($s);
+                }
+            }
+        }
+
+        // 3) Nichts gefunden
         return null;
-    }    
+    }  
 }
