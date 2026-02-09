@@ -2175,7 +2175,7 @@ class PSAVehicle extends IPSModule
             'code'          => $code,
             'redirect_uri'  => $redirect,
             'client_id'     => $clientId,
-            'client_secret' => $clientSecret,
+            //'client_secret' => $clientSecret,
             'code_verifier' => $verifier
         ];
 
@@ -2355,6 +2355,8 @@ class PSAVehicle extends IPSModule
             curl_setopt($ch, CURLOPT_SSLCERT, $certPem);
             curl_setopt($ch, CURLOPT_SSLKEY,  $keyPem);
         }
+        //DEBUG
+        curl_setopt($ch, CURLOPT_VERBOSE, true);
 
         $body = curl_exec($ch);
         $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
