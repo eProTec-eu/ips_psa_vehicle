@@ -248,7 +248,7 @@ class PSAVehicle extends IPSModule
                             "name"    => "AuthorizeUrlOpenBtn",
                             "caption" => "Authorize‑URL im externen Browser öffnen",
                             "onClick" => 'echo PSAVehicle_GetAuthorizeUrl($id);',
-                            "enabled" => false
+                            "enabled" => false,
                             "link"    => true
                         ],
                         [
