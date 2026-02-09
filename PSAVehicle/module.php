@@ -532,12 +532,6 @@ class PSAVehicle extends IPSModule
                 $countryFallback = 'de';
             }
 
-            $files = $this->apkListEntries($apkPath);
-            foreach($files as $file)
-                {
-                    IPS_LogMessage("PSAVehicle", $file);
-                }
-
             $data = $this->ExtractAppDataFromApkExternal($apkPath, $countryFallback);
 
             IPS_LogMessage("PSAVehicle", "ClientId = "     . $data["clientId"]);
@@ -2253,130 +2247,140 @@ class PSAVehicle extends IPSModule
             $out = trim(shell_exec('command -v '.escapeshellarg($cmd).' 2>/dev/null') ?? '');
             return $out;
         };
-        $binUnzip   = $which('unzip');          // bevorzugt
-        $binBusybox = $which('busybox');        // busybox unzip
-        $bin7z      = $which('7z');             // p7zip-full
+        $binUnzip   = $which('unzip');   // bevorzugt
+        $binBusybox = $which('busybox'); // busybox unzip
+        $bin7z      = $which('7z');      // p7zip-full
 
+        // Eintrag lesen (unzip/busybox/7z)
         $readEntry = function(string $entry) use ($apkPath, $binUnzip, $binBusybox, $bin7z): string {
             $data = '';
             if ($binUnzip !== '') {
-                // unzip -p <apk> <entry>
                 $cmd = escapeshellcmd($binUnzip).' -p '.escapeshellarg($apkPath).' '.escapeshellarg($entry).' 2>/dev/null';
                 $data = shell_exec($cmd) ?? '';
                 if ($data !== '') return $data;
             }
             if ($binBusybox !== '') {
-                // busybox unzip -p <apk> <entry>
                 $cmd = escapeshellcmd($binBusybox).' unzip -p '.escapeshellarg($apkPath).' '.escapeshellarg($entry).' 2>/dev/null';
                 $data = shell_exec($cmd) ?? '';
                 if ($data !== '') return $data;
             }
             if ($bin7z !== '') {
-                // 7z x -so -y <apk> <entry>
                 $cmd = escapeshellcmd($bin7z).' x -so -y '.escapeshellarg($apkPath).' '.escapeshellarg($entry).' 2>/dev/null';
                 $data = shell_exec($cmd) ?? '';
                 if ($data !== '') return $data;
             }
             return '';
         };
-/*
-        // 2) cultures.json lesen → culture bestimmen
-        $culturesJson = $readEntry('res/raw/cultures.json');
-        if ($culturesJson === '') {
-            throw new \RuntimeException("res/raw/cultures.json konnte nicht gelesen werden (unzip/busybox/7z nicht verfügbar oder Eintrag fehlt).");
-        }
-        $cultures = json_decode($culturesJson, true);
-        if (!is_array($cultures)) {
-            throw new \RuntimeException("cultures.json ist ungültig (kein JSON).");
+
+        // 2) Alle Pfade einmal ermitteln (hast du bereits)
+        $files = $this->apkListEntries($apkPath);
+
+        // 3) Beste parameters.json suchen (dein vorhandener Helper)
+        $countryProp = strtoupper(trim($this->ReadPropertyString('Country') ?: $countryFallback ?: 'DE'));
+        if ($countryProp === '') $countryProp = 'DE';
+
+        $best = $this->selectBestParametersPath($files, $countryProp);
+        if ($best === null) {
+            throw new \RuntimeException("Keine geeignete parameters.json oder assets/config*.json in der APK gefunden.");
         }
 
-        $countryProp = strtolower(trim($this->ReadPropertyString('Country') ?: $countryFallback));
-        if ($countryProp === '') $countryProp = 'de';
-        if (!isset($cultures[$countryProp]['languages'][0])) {
-            throw new \RuntimeException("Kein Culture-Mapping für Land '$countryProp' in cultures.json.");
-        }
-        $culture = $cultures[$countryProp]['languages'][0]; // z.B. de_DE*/
-
-        /*/ Culture aus countryFallback ableiten
-        $culture = $this->cultureFromCountry($countryFallback);
-
-        $parts = explode('_', $culture);
-        if (count($parts) !== 2) {
-            throw new \RuntimeException("Unerwartetes Culture-Format: $culture");
-        }
-        [$lang, $COUNTRY] = $parts; // de, DE
-
-        // 3) parameters.json lesen
-        $parametersPath = sprintf('res/raw-%s-r%s/parameters.json', strtolower($lang), strtoupper($COUNTRY));
-        $parametersJson = $readEntry($parametersPath);
+        // 4) Dateiinhalt laden
+        $entryPath = $best['path'];
+        $parametersJson = $readEntry($entryPath);
         if ($parametersJson === '') {
-            throw new \RuntimeException("parameters.json nicht gefunden: $parametersPath");
-        }*/
-        // Alle möglichen parameters.json Einträge suchen und den ersten gültigen nehmen:
-
-        $entries = [
-            'res/raw/parameters.json',
-            'res/raw-de/parameters.json',
-            'res/raw-fr/parameters.json',
-            'res/raw-en/parameters.json',
-            'res/raw-eu/parameters.json',
-            'res/raw-de-rDE/parameters.json',
-            'res/raw-fr-rFR/parameters.json',
-            'res/raw-en-rGB/parameters.json'
-        ];
-
-        $parametersJson = '';
-        foreach ($entries as $e) {
-            $parametersJson = $readEntry($e);
-            if ($parametersJson) break;
+            throw new \RuntimeException("Eintrag konnte nicht extrahiert werden: " . $entryPath);
         }
 
-        if ($parametersJson === '') {
-            throw new RuntimeException("parameters.json nicht gefunden!");
-        }
-
+        // 5) JSON parsen
         $parameters = json_decode($parametersJson, true);
         if (!is_array($parameters)) {
-            throw new \RuntimeException("parameters.json ist ungültig (kein JSON).");
+            throw new \RuntimeException("Ungültiges JSON in: " . $entryPath);
         }
 
-        $clientId     = trim((string)($parameters['cvsClientId'] ?? ''));
-        $clientSecret = trim((string)($parameters['cvsSecret']   ?? ''));
+        // 6) ClientID/ClientSecret robust extrahieren (Citroën: cvsClientId/cvsSecret)
+        $clientId = '';
+        $clientSecret = '';
+
+        $pairs = [
+            ['cvsClientId','cvsSecret'],           // Citroën/PSA (z. B. in res/raw-*/parameters.json)
+            ['clientId','clientSecret'],           // generisch
+            ['apicClientId','apicClientSecret'],   // gelegentlich in parameters/configuration.json
+        ];
+        foreach ($pairs as [$kId,$kSecret]) {
+            if (isset($parameters[$kId]) && isset($parameters[$kSecret])) {
+                $clientId     = trim((string)$parameters[$kId]);
+                $clientSecret = trim((string)$parameters[$kSecret]);
+                break;
+            }
+        }
+
         if ($clientId === '' || $clientSecret === '') {
-            throw new \RuntimeException("ClientId/ClientSecret fehlen in parameters.json.");
+            // Für Transparenz: zeige kurz, welche Keys vorhanden sind
+            IPS_LogMessage("PSAVehicle", "Schlüssel in $entryPath: ".implode(',', array_keys($parameters)));
+            throw new \RuntimeException("ClientId/ClientSecret fehlen in $entryPath.");
         }
 
-        // 4) Marke heuristisch aus Dateiname ableiten (ausreichend für Redirect-Scheme)
+        // 7) Sprache/Land aus dem parameters-Pfad ableiten, ansonsten aus Modul-Property
+        $lang = 'en';
+        $COUNTRY = $countryProp;
+        if (preg_match('~^res/raw-([a-z]{2})(?:-r([A-Z]{2}))?/parameters\.json$~', $entryPath, $m)) {
+            $lang = $m[1];
+            if (!empty($m[2])) $COUNTRY = $m[2];
+        } else {
+            // simple Map für Sprache aus Land, falls kein Match
+            $map = [
+                'DE'=>'de','AT'=>'de','CH'=>'de','FR'=>'fr','ES'=>'es','IT'=>'it','NL'=>'nl','BE'=>'fr','GB'=>'en','IE'=>'en'
+            ];
+            $lang = $map[$COUNTRY] ?? 'en';
+        }
+        $culture = strtolower($lang).'_'.strtoupper($COUNTRY);
+
+        // 8) Marke heuristisch aus Dateiname
         $fn = strtolower(basename($apkPath));
         $brand = 'unknown';
-        if (str_contains($fn, 'citroen'))  $brand = 'citroen';
-        elseif (str_contains($fn, 'peugeot')) $brand = 'peugeot';
-        elseif (str_contains($fn, 'vauxhall')) $brand = 'vauxhall';
-        elseif (str_contains($fn, 'opel'))     $brand = 'opel';
-        elseif (str_contains($fn, 'ds'))       $brand = 'ds';
+        if (strpos($fn, 'citroen') !== false)      $brand = 'citroen';
+        elseif (strpos($fn, 'peugeot') !== false)  $brand = 'peugeot';
+        elseif (strpos($fn, 'vauxhall') !== false) $brand = 'vauxhall';
+        elseif (strpos($fn, 'opel') !== false)     $brand = 'opel';
+        elseif (preg_match('~(^|[^a-z])ds([^a-z]|$)~', $fn)) $brand = 'ds';
 
-        // 5) RedirectUri nach Marke
-        $schemeMap = [
-            'citroen'  => 'mycitroensdk',
-            'peugeot'  => 'mymap',
-            'vauxhall' => 'mymvxsdk',
-            'opel'     => 'myopelsdk',
-            'ds'       => 'mymdssdk',
-        ];
-        $redirectUri = isset($schemeMap[$brand])
-            ? sprintf('%s://oauth2redirect/%s', $schemeMap[$brand], strtolower($COUNTRY))
-            : '';
+        // 9) Redirect-Scheme dynamisch aus APK extrahieren (Manifest/DEX Stringscan)
+        $scheme = $this->detectRedirectSchemeFromApkFast($files, $readEntry);
+        if ($scheme === null) {
+            // Marken-Fallback, falls wirklich nichts gefunden
+            $schemeMap = [
+                'citroen'  => 'mycitroensdk', // älteres Default; aktuelle Builds nutzen oft "mymacsdk" (Manifest prüfen)
+                'peugeot'  => 'mymapsdk',
+                'vauxhall' => 'mymvxsdk',
+                'opel'     => 'myopelsdk',
+                'ds'       => 'mymdssdk',
+            ];
+            $scheme = $schemeMap[$brand] ?? 'mycitroensdk';
+            IPS_LogMessage("PSAVehicle", "Kein Scheme im APK gefunden – Fallback: $scheme");
+        } else {
+            IPS_LogMessage("PSAVehicle", "Redirect-Scheme im APK gefunden: $scheme");
+        }
+
+        // 10) RedirectURI bauen (z. B. "mymacsdk://oauth2redirect/de")
+        $redirectUri = sprintf('%s://oauth2redirect/%s', $scheme, strtolower($COUNTRY));
+
+        // 11) Ergebnis zurückgeben (und optional Properties setzen, falls gewünscht)
+        // IPS_SetProperty($this->InstanceID, "ClientID", $clientId);
+        // IPS_SetProperty($this->InstanceID, "ClientSecret", $clientSecret);
+        // IPS_SetProperty($this->InstanceID, "RedirectURI", $redirectUri);
 
         return [
-            'clientId'     => $clientId,
-            'clientSecret' => $clientSecret,
-            'redirectUri'  => $redirectUri,
-            'brand'        => $brand,
-            'culture'      => $culture,
-            'country'      => strtolower($COUNTRY),
-            'parameters'   => $parameters,
+            'clientId'       => $clientId,
+            'clientSecret'   => $clientSecret,
+            'redirectUri'    => $redirectUri,
+            'brand'          => $brand,
+            'culture'        => $culture,
+            'country'        => strtolower($COUNTRY),
+            'parameters'     => $parameters,
+            'parametersPath' => $entryPath
         ];
-    }  
+    }
+
     /** Listet alle Einträge der APK (ähnlich 'unzip -Z1') */
     private function apkListEntries(string $apkPath): array
     {
@@ -2497,4 +2501,145 @@ class PSAVehicle extends IPSModule
     }
     return $url;
     }
+
+    /**
+     * Wählt die "beste" parameters.json (oder assets/config*.json) aus allen APK-Dateipfaden.
+     * Priorisiert Land+Sprache, dann Sprache, dann irgendeine Lokalisierung, dann unlokalisiert, dann assets-Fallback.
+     */
+    private function selectBestParametersPath(array $files, string $countryPref = 'DE'): ?array
+    {
+        $countryPref = strtoupper(trim($countryPref)) ?: 'DE';
+
+        // Sprache(n) priorisiert aus Land ableiten (sehr einfache Zuordnung; erweitere nach Bedarf)
+        $langPrefsByCountry = [
+            'DE' => ['de','en'],
+            'AT' => ['de','en'],
+            'CH' => ['de','fr','it','de-CH','en'],
+            'FR' => ['fr','en'],
+            'ES' => ['es','en'],
+            'IT' => ['it','en'],
+            'NL' => ['nl','en'],
+            'BE' => ['fr','nl','de','en'],
+            'GB' => ['en'],
+            'IE' => ['en'],
+            // Fallback:
+            'DEFAULT' => ['en']
+        ];
+        $langPrefs = $langPrefsByCountry[$countryPref] ?? $langPrefsByCountry['DEFAULT'];
+
+        // Kandidaten sammeln
+        $candidates = [];
+        foreach ($files as $f) {
+            $f = trim($f);
+            if ($f === '') continue;
+
+            // 1) parameters.json in res/raw-... (lokalisiert)
+            if (preg_match('~^res\/raw-([a-z]{2})(?:-r([A-Z]{2}))?\/parameters\.json$~', $f, $m)) {
+                $lang = $m[1];              // z. B. de
+                $cc   = $m[2] ?? '';        // z. B. DE oder leer
+                $score = 0;
+
+                // Starker Boost wenn Ländercode exakt passt
+                if ($cc === $countryPref) $score += 100;
+
+                // Sprach-Priorisierung: je weiter vorne in langPrefs, desto höherer Bonus
+                $p = array_search($lang, $langPrefs, true);
+                if ($p !== false) {
+                    $score += 50 - ($p * 5); // 50, 45, 40, ...
+                } else {
+                    // Einzelne Sonderfälle, z. B. "de-CH" in Preferences → gleiche Sprache "de"
+                    foreach ($langPrefs as $idx => $lp) {
+                        if (strpos($lp, $lang) === 0) { // grobe Annäherung
+                            $score += 30 - ($idx * 3);
+                            break;
+                        }
+                    }
+                }
+
+                // leichte Bevorzugung von "de-rDE" gegenüber "de-rAT"/"de-rCH" wenn countryPref=DE
+                if ($lang === 'de' && $countryPref === 'DE' && $cc === 'DE') $score += 5;
+
+                $candidates[] = ['path' => $f, 'kind' => 'parameters', 'score' => $score];
+                continue;
+            }
+
+            // 2) unlokalisierte res/raw/parameters.json
+            if ($f === 'res/raw/parameters.json') {
+                $candidates[] = ['path' => $f, 'kind' => 'parameters', 'score' => 20];
+                continue;
+            }
+
+            // 3) Assets-Fallbacks
+            if ($f === 'assets/configuration.json' || $f === 'assets/config.json') {
+                // niedrigerer Score als eine parameters.json
+                $candidates[] = ['path' => $f, 'kind' => 'assets', 'score' => 10];
+                continue;
+            }
+        }
+
+        if (empty($candidates)) {
+            return null;
+        }
+
+        // Beste Datei wählen
+        usort($candidates, function($a, $b) {
+            return $b['score'] <=> $a['score'];
+        });
+
+        // Optional: Top 3 ins Log
+        for ($i=0; $i < min(3, count($candidates)); $i++) {
+            $c = $candidates[$i];
+            IPS_LogMessage("PSAVehicle", sprintf("parameters.json-Kandidat #%d: %s (score=%d, kind=%s)",
+                $i+1, $c['path'], $c['score'], $c['kind']));
+        }
+
+        return $candidates[0];
+    }
+
+    /**
+     * Sucht im gesamten APK (Manifest + classes*.dex) nach "<scheme>://oauth2redirect/<cc>"
+     * oder nach bekannten Scheme-Strings. Arbeitet über readEntry(), kein ZipArchive nötig.
+     */
+    private function detectRedirectSchemeFromApkFast(array $files, callable $readEntry): ?string
+    {
+        // 1) Primärquellen: Manifest & DEX-Dateien
+        $names = [];
+        if (in_array('AndroidManifest.xml', $files, true)) {
+            $names[] = 'AndroidManifest.xml';
+        }
+        foreach ($files as $f) {
+            if (preg_match('~^classes(\d*)\.dex$~i', basename($f))) {
+                $names[] = $f;
+            }
+        }
+        // Sicherheitsnetz: keine Primärtitel? Dann alles durchsuchen (kann langsam sein)
+        if (empty($names)) $names = $files;
+
+        // Regex sucht direkt URIs inkl. Scheme + Country
+        $re = '/([a-z0-9]+):\/\/oauth2redirect\/([a-z]{2})/i';
+
+        foreach ($names as $name) {
+            $buf = $readEntry($name);
+            if ($buf === '') continue;
+
+            if (preg_match($re, $buf, $m)) {
+                // Volle URI gefunden -> Scheme extrahieren
+                return strtolower($m[1]);
+            }
+        }
+
+        // 2) Falls keine vollständige URI gefunden: nach bekannten Schemes suchen
+        $known = ['mymacsdk','mycitroensdk','mymapsdk','myopelsdk','mymdssdk','mymvxsdk'];
+        foreach ($names as $name) {
+            $buf = $readEntry($name);
+            if ($buf === '') continue;
+            foreach ($known as $k) {
+                if (strpos($buf, $k) !== false) {
+                    return $k;
+                }
+            }
+        }
+
+        return null;
+    }    
 }
