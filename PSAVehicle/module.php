@@ -2123,9 +2123,15 @@ class PSAVehicle extends IPSModule
     private function pkceGenerateVerifier(): string
     {
         // 43..128 Zeichen, unreserved (RFC 7636)
-        $raw = base64_encode(random_bytes(64));
+        //$raw = base64_encode(random_bytes(64));
         // Base64URL ohne '='
-        return rtrim(strtr($raw, '+/', '-_'), '=');
+        
+        $bytes = random_bytes(32);
+        $verifier = rtrim(strtr(base64_encode($bytes), '+/', '-_'), '=');
+        // ergibt 43 Zeichen, RFC‑7636‑konform
+
+        //return rtrim(strtr($raw, '+/', '-_'), '=');
+        return $verifier;
     }
 
     private function pkceChallengeS256(string $verifier): string
