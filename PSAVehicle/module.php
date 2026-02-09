@@ -223,6 +223,7 @@ class PSAVehicle extends IPSModule
                 ], 
                 
                 // OAuth2 (manuelle Verbindung)
+                $hasUrl = ($this->GetBuffer("authorize_url_encoded") !== '');
                 [
                     "type"    => "ExpansionPanel",
                     "caption" => "OAuth2 (manuelle Verbindung)",
@@ -244,7 +245,6 @@ class PSAVehicle extends IPSModule
                             "value"   => $this->ReadPropertyString("AuthorizeUrlDecoded")
                         ],
                         [
-                            $hasUrl = ($this->GetBuffer("authorize_url_encoded") !== '');
                             "type"    => "Button",
                             "name"    => "AuthorizeUrlOpenBtn",
                             "caption" => "Authorize‑URL im externen Browser öffnen",
