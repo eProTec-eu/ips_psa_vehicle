@@ -276,6 +276,11 @@ class PSAVehicle extends IPSModule
                             "type"    => "Button",
                             "label"   => "Code einfügen & tauschen",
                             "onClick" => 'PSAVehicle_ActionSubmitOAuthCode($id);'
+                        ],
+                        [
+                            "type" => "Label", 
+                            "name"    => "OAuthCodeLog",
+                            "caption" => ""
                         ]
                     ]
                 ],
@@ -2357,6 +2362,8 @@ class PSAVehicle extends IPSModule
         $eno  = curl_errno($ch);
         curl_close($ch);
 
+        $this->uiLog($err);
+
         IPS_LogMessage("PSAVehicle", "SmartPOST host=$host path=$path | mTLS=" . ($useMtls ? 'yes' : 'no'));
         IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
         IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== '' ? $err . " (errno $eno)" : 'OK'));
@@ -2826,4 +2833,7 @@ class PSAVehicle extends IPSModule
         // 3) Nichts gefunden
         return null;
     }  
+
+    private function uiLog(string $txt): void
+    { $this->UpdateFormField('OAuthCodeLog', 'caption', $txt); }
 }
