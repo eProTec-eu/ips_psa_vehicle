@@ -2207,9 +2207,9 @@ class PSAVehicle extends IPSModule
             CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
         ]);
         // mTLS mit deinem PSA-Client-Zertifikat (aus APK)
-        if ($certPath && $keyPath) {
-            curl_setopt($ch, CURLOPT_SSLCERT, $certPath);
-            curl_setopt($ch, CURLOPT_SSLKEY,  $keyPath);
+        if ($certPem && $keyPem) {
+            curl_setopt($ch, CURLOPT_SSLCERT, $certPem);
+            curl_setopt($ch, CURLOPT_SSLKEY,  $keyPem);
         }
 
         $body = curl_exec($ch);
