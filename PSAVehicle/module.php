@@ -245,6 +245,14 @@ class PSAVehicle extends IPSModule
                         ],
                         [
                             "type"    => "Button",
+                            "name"    => "AuthorizeUrlOpenBtn",
+                            "caption" => "Authorize‑URL im externen Browser öffnen",
+                            "onClick" => 'echo PSAVehicle_GetAuthorizeUrl($id);',
+                            "enabled" => false
+                            "link"    => true
+                        ],
+                        [
+                            "type"    => "Button",
                             "label"   => "Authorize-URL ins Log schreiben",
                             "onClick" => 'PSAVehicle_ActionLogAuthorizeUrl($id);'
                         ],
@@ -2096,15 +2104,18 @@ class PSAVehicle extends IPSModule
 
         // 4) WICHTIG: AuthURL ist bereits /authorize → NICHT noch einmal /authorize anhängen!
         $authorizeUrl = $authUrlBase . '?' . $q;
+        $this->SetBuffer("authorize_url_encoded", $authorizeUrl);
 
         // Anzeige: dekodiert nur für die UI (Kopie), der echte Browser-Link soll encoded bleiben
         $decoded = $authUrlBase . '?' . urldecode($q);
 
         IPS_SetProperty($this->InstanceID, "AuthorizeUrlDecoded", $decoded);
+        
         IPS_ApplyChanges($this->InstanceID);
 
         IPS_LogMessage("PSAVehicle", "Authorize URL (encoded): " . $authorizeUrl);
         IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): " . $decoded);
+        $this->UpdateFormField('AuthorizeUrlOpenBtn', 'enabled', true);
     }
 
     private function pkceGenerateVerifier(): string
@@ -2277,8 +2288,10 @@ class PSAVehicle extends IPSModule
             throw new \RuntimeException("Kein Culture-Mapping für Land '$countryProp' in cultures.json.");
         }
         $culture = $cultures[$countryProp]['languages'][0]; // z.B. de_DE*/
-        //NUR ZUM TESTEN!!!
-        $culture = "de_DE";
+
+        // Culture aus countryFallback ableiten
+        $culture = $this->cultureFromCountry($countryFallback);
+
         $parts = explode('_', $culture);
         if (count($parts) !== 2) {
             throw new \RuntimeException("Unerwartetes Culture-Format: $culture");
@@ -2379,5 +2392,78 @@ class PSAVehicle extends IPSModule
 
         $files = array_filter(array_map('trim', explode("\n", $out)));
         return array_values($files);
-    }    
+    }   
+    /**
+     * Liefert eine Culture im Format ll_CC aus einem ISO-3166 Ländercode (2-stellig).
+     * Beispiele: de -> de_DE, fr -> fr_FR, gb -> en_GB, us -> en_US
+     * Fallbacks: en_CC, letztlich en_US.
+     */
+    private function cultureFromCountry(string $country): string
+    {
+        $cc = strtoupper(trim($country));
+        if ($cc === '' || strlen($cc) !== 2) {
+            return 'en_US';
+        }
+
+        // 1) Explizite Zuordnung gängiger Länder -> Culture
+        $map = [
+            // DACH
+            'DE' => 'de_DE',
+            'AT' => 'de_AT',
+            'CH' => 'de_CH',
+
+            // Westeuropa
+            'FR' => 'fr_FR',
+            'BE' => 'fr_BE',   // (alternativ nl_BE)
+            'NL' => 'nl_NL',
+            'LU' => 'fr_LU',   // (alternativ de_LU, lb_LU – je nach App)
+            'IT' => 'it_IT',
+            'ES' => 'es_ES',
+            'PT' => 'pt_PT',
+            'IE' => 'en_IE',
+            'GB' => 'en_GB',
+
+            // Nordeuropa
+            'SE' => 'sv_SE',
+            'DK' => 'da_DK',
+            'NO' => 'nb_NO',
+            'FI' => 'fi_FI',
+
+            // Osteuropa (Beispiele)
+            'PL' => 'pl_PL',
+            'CZ' => 'cs_CZ',
+            'SK' => 'sk_SK',
+            'HU' => 'hu_HU',
+            'RO' => 'ro_RO',
+
+            // Nordamerika
+            'US' => 'en_US',
+            'CA' => 'en_CA',   // (alternativ fr_CA für Québec)
+
+            // Sonstige Beispiele
+            'AU' => 'en_AU',
+            'NZ' => 'en_NZ',
+        ];
+
+        if (isset($map[$cc])) {
+            return $map[$cc];
+        }
+
+        // 2) Heuristik: versuche en_CC (englisch mit Land)
+        $candidate = 'en_' . $cc;
+        // Wenn du strikter sein willst (existiert/enumerieren), könntest du hier eine Liste erlaubter en_CC prüfen.
+        return $candidate ?: 'en_US';
+    } 
+    
+    public function GetAuthorizeUrl(): string
+    {
+        //$url = $this->ReadPropertyString("AuthorizeUrlDecoded");
+        $url = $this->GetBuffer("authorize_url_encoded") ?: '';
+        if ($url === '') {
+        IPS_LogMessage("PSAVehicle", "GetAuthorizeUrl: Noch keine Authorize-URL erzeugt.");
+        // Rückgabe muss http/https sein, damit nicht nur ein Dialog erscheint.
+        return "https://";
+    }
+    return $url;
+    }
 }
