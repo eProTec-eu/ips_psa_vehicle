@@ -243,12 +243,13 @@ class PSAVehicle extends IPSModule
                             "width"   => "600px",
                             "value"   => $this->ReadPropertyString("AuthorizeUrlDecoded")
                         ],
+                        $hasUrl = ($this->GetBuffer("authorize_url_encoded") !== '');
                         [
                             "type"    => "Button",
                             "name"    => "AuthorizeUrlOpenBtn",
                             "caption" => "Authorize‑URL im externen Browser öffnen",
                             "onClick" => 'echo PSAVehicle_GetAuthorizeUrl($id);',
-                            "enabled" => false,
+                            "enabled" => $hasUrl,
                             "link"    => true
                         ],
                         [
@@ -2115,7 +2116,7 @@ class PSAVehicle extends IPSModule
 
         IPS_LogMessage("PSAVehicle", "Authorize URL (encoded): " . $authorizeUrl);
         IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): " . $decoded);
-        $this->UpdateFormField('AuthorizeUrlOpenBtn', 'enabled', true);
+        //$this->UpdateFormField('AuthorizeUrlOpenBtn', 'enabled', true);
     }
 
     private function pkceGenerateVerifier(): string
