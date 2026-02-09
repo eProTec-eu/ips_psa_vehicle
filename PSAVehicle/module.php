@@ -2343,7 +2343,7 @@ class PSAVehicle extends IPSModule
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 30,
             CURLOPT_CAINFO         => $caInfo ?: '/etc/ssl/certs/ca-certificates.crt',
-            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => 2,
         ]);
 
