@@ -243,8 +243,8 @@ class PSAVehicle extends IPSModule
                             "width"   => "600px",
                             "value"   => $this->ReadPropertyString("AuthorizeUrlDecoded")
                         ],
-                        $hasUrl = ($this->GetBuffer("authorize_url_encoded") !== '');
                         [
+                            $hasUrl = ($this->GetBuffer("authorize_url_encoded") !== '');
                             "type"    => "Button",
                             "name"    => "AuthorizeUrlOpenBtn",
                             "caption" => "Authorize‑URL im externen Browser öffnen",
@@ -2106,6 +2106,7 @@ class PSAVehicle extends IPSModule
         // 4) WICHTIG: AuthURL ist bereits /authorize → NICHT noch einmal /authorize anhängen!
         $authorizeUrl = $authUrlBase . '?' . $q;
         $this->SetBuffer("authorize_url_encoded", $authorizeUrl);
+        $this->UpdateFormField('AuthorizeUrlOpenBtn', 'enabled', true);
 
         // Anzeige: dekodiert nur für die UI (Kopie), der echte Browser-Link soll encoded bleiben
         $decoded = $authUrlBase . '?' . urldecode($q);
