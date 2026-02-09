@@ -2181,7 +2181,9 @@ class PSAVehicle extends IPSModule
         //IPS_LogMessage('PSAVehicle', 'DEBUG PKCE: authorize_challenge=' . $this->ReadAttributeString('PkceChallenge'));
 
         //$resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
-        $resp = $this->curlPostForm($tokenUrl, $post);
+        //$resp = $this->curlPostForm($tokenUrl, $post);
+        $resp = $this->curlPostFormSmart($tokenUrl, $post);
+        
         
         //DEBUG
         //IPS_LogMessage("PSAVehicle", "Token-ResponseRaw: " . $resp);
@@ -2294,7 +2296,78 @@ class PSAVehicle extends IPSModule
             'body' => $body !== false ? $body : $err,
             'http' => $http
         ];
-    }        
+    }   
+    
+    private function curlPostFormSmart(
+        string $url,
+        array $fields,
+        ?string $certPem = null,
+        ?string $keyPem  = null,
+        ?string $caInfo  = null
+    ): array
+    {
+        $postFields = http_build_query($fields, '', '&', PHP_QUERY_RFC3986);
+
+        // Heuristik: Token-Endpoints nie mTLS; gewisse Middleware/API-Hosts häufig mTLS
+        $useMtls = false;
+        $host = parse_url($url, PHP_URL_HOST) ?: '';
+        $path = parse_url($url, PHP_URL_PATH) ?: '';
+
+        $isToken = (stripos($path, '/am/oauth2/access_token') !== false);
+        if (!$isToken) {
+            // Hier deine Marken-spezifischen Hosts, die mTLS erfordern:
+            $mtlsHosts = [
+                'ac-mym.servicesgp.mpsa.com',
+                'api.groupe-psa.com',
+                'api-basic.groupe-psa.com',
+                // ggf. weitere
+            ];
+            if (in_array(strtolower($host), $mtlsHosts, true)) {
+                $useMtls = true;
+            }
+        }
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $postFields,
+            CURLOPT_HTTPHEADER     => [
+                'Content-Type: application/x-www-form-urlencoded',
+                'Accept: application/json'
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_CAINFO         => $caInfo ?: '/etc/ssl/certs/ca-certificates.crt',
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+
+        if ($useMtls) {
+            if (!$certPem || !$keyPem) {
+                curl_close($ch);
+                return ['ok' => false, 'body' => 'mTLS erforderlich, aber Zertifikat/Key fehlen', 'http' => 0];
+            }
+            curl_setopt($ch, CURLOPT_SSLCERT, $certPem);
+            curl_setopt($ch, CURLOPT_SSLKEY,  $keyPem);
+        }
+
+        $body = curl_exec($ch);
+        $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        $eno  = curl_errno($ch);
+        curl_close($ch);
+
+        IPS_LogMessage("PSAVehicle", "SmartPOST host=$host path=$path | mTLS=" . ($useMtls ? 'yes' : 'no'));
+        IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
+        IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== '' ? $err . " (errno $eno)" : 'OK'));
+        IPS_LogMessage("PSAVehicle", "Body: " . (is_string($body) ? substr($body, 0, 600) : 'kein String'));
+
+        return [
+            'ok'   => ($body !== false && $http >= 200 && $http < 300),
+            'body' => $body !== false ? $body : $err,
+            'http' => $http
+        ];
+    }    
 
     private function autoSetRedirectUriFromBrand(string $brand, string $country): bool
     {
