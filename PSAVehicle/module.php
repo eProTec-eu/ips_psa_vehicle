@@ -2148,6 +2148,7 @@ class PSAVehicle extends IPSModule
 
         $tokenUrl   = $this->ReadPropertyString("TokenURL");
         $clientId   = $this->ReadPropertyString("ClientID");
+        $clientSecret   = $this->ReadPropertyString("ClientSecret");
         $redirect   = $this->ReadPropertyString("RedirectURI");
         $certPath   = $this->ReadPropertyString("CertPath"); // mTLS (Client-Zertifikat)
         $keyPath    = $this->ReadPropertyString("KeyPath");
@@ -2156,16 +2157,19 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "TOKEN-URL: " . $tokenUrl);
         IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " . $redirect);
         IPS_LogMessage("PSAVehicle", "ClientID im Token-Request: " . $clientId);
+        IPS_LogMessage("PSAVehicle", "Code Verifier: " . $verifier);
 
         $post = [
             'grant_type'    => 'authorization_code',
             'code'          => $code,
             'redirect_uri'  => $redirect,
             'client_id'     => $clientId,
+            'client_secret' => $clientSecret,
             'code_verifier' => $verifier
         ];
 
-        $resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
+        //$resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
+        $resp = $this->curlPostForm($tokenUrl, $post);
         
         //DEBUG
         //IPS_LogMessage("PSAVehicle", "Token-ResponseRaw: " . $resp);
@@ -2192,7 +2196,7 @@ class PSAVehicle extends IPSModule
         return true;
     }
 
-    private function curlPostForm(string $url, array $fields, string $certPem, string $keyPem): array
+    private function curlPostForm(string $url, array $fields, string $certPem = null, string $keyPem = null): array
     {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -2201,10 +2205,13 @@ class PSAVehicle extends IPSModule
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 25,
             CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
-            // mTLS mit deinem PSA-Client-Zertifikat (aus APK)
-            CURLOPT_SSLCERT        => $certPem,
-            CURLOPT_SSLKEY         => $keyPem
         ]);
+        // mTLS mit deinem PSA-Client-Zertifikat (aus APK)
+        if ($certPath && $keyPath) {
+            curl_setopt($ch, CURLOPT_SSLCERT, $certPath);
+            curl_setopt($ch, CURLOPT_SSLKEY,  $keyPath);
+        }
+
         $body = curl_exec($ch);
         $http = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
         $err  = curl_error($ch);
