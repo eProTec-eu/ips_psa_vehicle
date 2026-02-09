@@ -2291,7 +2291,7 @@ class PSAVehicle extends IPSModule
         }
         $culture = $cultures[$countryProp]['languages'][0]; // z.B. de_DE*/
 
-        // Culture aus countryFallback ableiten
+        /*/ Culture aus countryFallback ableiten
         $culture = $this->cultureFromCountry($countryFallback);
 
         $parts = explode('_', $culture);
@@ -2305,7 +2305,29 @@ class PSAVehicle extends IPSModule
         $parametersJson = $readEntry($parametersPath);
         if ($parametersJson === '') {
             throw new \RuntimeException("parameters.json nicht gefunden: $parametersPath");
+        }*/
+        // Alle möglichen parameters.json Einträge suchen und den ersten gültigen nehmen:
+        $entries = [
+            'res/raw/parameters.json',
+            'res/raw-de/parameters.json',
+            'res/raw-fr/parameters.json',
+            'res/raw-en/parameters.json',
+            'res/raw-eu/parameters.json',
+            'res/raw-de-rDE/parameters.json',
+            'res/raw-fr-rFR/parameters.json',
+            'res/raw-en-rGB/parameters.json'
+        ];
+
+        $parametersJson = '';
+        foreach ($entries as $e) {
+            $parametersJson = $readEntry($e);
+            if ($parametersJson) break;
         }
+
+        if ($parametersJson === '') {
+            throw new RuntimeException("parameters.json nicht gefunden!");
+        }
+
         $parameters = json_decode($parametersJson, true);
         if (!is_array($parameters)) {
             throw new \RuntimeException("parameters.json ist ungültig (kein JSON).");
