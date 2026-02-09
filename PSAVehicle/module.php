@@ -2488,6 +2488,6 @@ class PSAVehicle extends IPSModule
         // Rückgabe muss http/https sein, damit nicht nur ein Dialog erscheint.
         return "https://";
     }
-    return rawurlencode($url);
+    return $url;
     }
 }
