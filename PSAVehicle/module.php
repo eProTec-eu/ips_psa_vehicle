@@ -533,6 +533,10 @@ class PSAVehicle extends IPSModule
             }
 
             $files = $this->apkListEntries($apkPath);
+            foreach($files as $file)
+                {
+                    IPS_LogMessage("PSAVehicle", $file);
+                }
 
             $data = $this->ExtractAppDataFromApkExternal($apkPath, $countryFallback);
 
@@ -2398,7 +2402,6 @@ class PSAVehicle extends IPSModule
                 // Zeilen mit Größe/Datum/Name: ... <size> <date> <time> <name>
                 if (preg_match('/^\s*\d+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+(.+)$/', $ln, $m)) {
                     $files[] = $m[1];
-                    IPS_LogMessage("PSAVehicle", "apkListEntries: {$m[1]}");
                 }
             }
             return $files;
