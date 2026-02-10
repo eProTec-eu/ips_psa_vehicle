@@ -326,6 +326,11 @@ class PSAVehicle extends IPSModule
                 ],
                 [
                     "type" => "Button",
+                    "label" => "Auto‑Polling starten (kein Code‑Kopieren)",
+                    "onClick" => 'PSAVehicle_StartAutoPolling($id);'
+                ],                
+                [
+                    "type" => "Button",
                     "label" => "Device-Code-Flow starten",
                     "onClick" => 'PSAVehicle_StartDeviceCode($id);'
                 ],
@@ -1433,7 +1438,7 @@ class PSAVehicle extends IPSModule
     }
 
     // Pollt den Device-Code-Endpunkt zum Token-Exchange (einzelner Poll-Durchlauf).
-    public function PollDeviceCode(): bool
+    /*public function PollDeviceCode(): bool
     {
         $tokenUrl   = trim($this->ReadPropertyString("TokenURL"));
         $clientId   = trim($this->ReadPropertyString("ClientID"));
@@ -1526,7 +1531,63 @@ class PSAVehicle extends IPSModule
             $this->WriteAttributeString("DeviceInterval", "");
             return false;
         }
-    }
+    }*/
+    public function PollDeviceCode() : bool
+    {
+        $tokenUrl = $this->ReadPropertyString("TokenURL");
+        $clientId = $this->ReadPropertyString("ClientID");
+        $verifier = $this->GetBuffer("pkce_verifier");
+        $redirect = trim($this->ReadPropertyString("RedirectURI"));
+        $realm    = '/' . ltrim(trim($this->ReadPropertyString("Realm")), '/');
+
+        if ($tokenUrl === "" || $clientId === "" || $verifier === "") {
+            IPS_LogMessage("PSAVehicle", "Auto-Poll: fehlende Parameter.");
+            return false;
+        }
+
+        // OAuth2 PKCE Token Request – OHNE code (Stellantis-Internal Flow)
+        $post = [
+            'grant_type'    => 'authorization_code',
+            'client_id'     => $clientId,
+            'code_verifier' => $verifier,
+            'redirect_uri'  => $redirect,
+            'realm'         => $realm,
+            'scope'         => 'openid profile'
+        ];
+
+        // Token holen (Smart mTLS Off)
+        $resp = $this->curlPostFormSmart($tokenUrl, $post);
+
+        // Erfolg?
+        if ($resp['http'] === 200 && is_string($resp['body'])) {
+
+            $json = json_decode($resp['body'], true);
+
+            if (is_array($json) && isset($json['access_token'])) {
+
+                IPS_LogMessage("PSAVehicle", "Auto-Poll: Token erhalten!");
+
+                // Speichern
+                IPS_SetProperty($this->InstanceID, "AccessToken", $json['access_token']);
+
+                if (!empty($json['refresh_token'])) {
+                    IPS_SetProperty($this->InstanceID, "RefreshToken", $json['refresh_token']);
+                }
+
+                IPS_ApplyChanges($this->InstanceID);
+
+                // Poll stoppen
+                $this->SetTimerInterval("DeviceCodePollTimer", 0);
+
+                return true;
+            }
+        }
+
+        // Noch kein Token
+        IPS_LogMessage("PSAVehicle", "Auto-Poll: warte... (HTTP ".$resp['http'].")");
+
+        return false;
+    }        
 
     // Manuelles Stoppen des Timers/Flows.
     public function StopDeviceCodePolling(): void
@@ -2139,6 +2200,10 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "Authorize URL (encoded): " . $authorizeUrl);
         IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): " . $decoded);
         //$this->UpdateFormField('AuthorizeUrlOpenBtn', 'enabled', true);
+        
+        // Auto-Poll nach Authorize-URL Erzeugung starten
+        $this->SetTimerInterval('DeviceCodePollTimer', 3000); // alle 3s schauen
+
     }
 
     private function pkceGenerateVerifier(): string
@@ -2923,4 +2988,22 @@ class PSAVehicle extends IPSModule
 
     private function uiLog(string $txt): void
     { $this->UpdateFormField('OAuthCodeLog', 'caption', $txt); }
+
+    public function StartAutoPolling() : bool
+    {
+        // 1) Authorize-URL erzeugen (inkl. PKCE)
+        $this->ActionGenerateAuthorizeUrl();
+
+        // Zeitstempel setzen
+        $this->SetBuffer("oauth_state_ts", (string)time());
+
+        // 2) Auto-Poll aktivieren (alle 3 Sekunden)
+        $intervalMs = 3000;
+        $this->SetTimerInterval("DeviceCodePollTimer", $intervalMs);
+
+        IPS_LogMessage("PSAVehicle", "Autopolling gestartet – alle {$intervalMs} ms wird geprüft.");
+
+        return true;
+    }
+
 }
