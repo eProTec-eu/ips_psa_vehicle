@@ -2342,8 +2342,15 @@ class PSAVehicle extends IPSModule
             ],
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT        => 30,
-            CURLOPT_CAINFO         => $caInfo ?: '/etc/ssl/certs/ca-certificates.crt',
-            CURLOPT_SSL_VERIFYPEER => false,
+        ]);
+  
+        // CA aus Property bevorzugen, sonst über Parameter, sonst OS-Default
+        $propCA = trim($this->ReadPropertyString("CAPath"));
+        $caToUse = $propCA !== '' ? $propCA : ($caInfo ?: '/etc/ssl/certs/ca-certificates.crt');
+        curl_setopt_array($ch, [
+            // ...
+            CURLOPT_CAINFO        => $caToUse,
+            CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
         ]);
 
@@ -2357,12 +2364,17 @@ class PSAVehicle extends IPSModule
         }
         //DEBUG
         curl_setopt($ch, CURLOPT_VERBOSE, true);
+        $traceFile = trim($this->ReadPropertyString("CertCacheDir")) . 'curltrace.txt';
+        $trace = fopen($traceFile, 'w');
+        curl_setopt($ch, CURLOPT_STDERR, $trace);
+        curl_setopt($ch, CURLOPT_VERBOSE, true);
 
         $body = curl_exec($ch);
         $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err  = curl_error($ch);
         $eno  = curl_errno($ch);
         curl_close($ch);
+        fclose($trace);
 
         $this->uiLog($err);
 
