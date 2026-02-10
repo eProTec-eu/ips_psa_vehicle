@@ -1,6 +1,11 @@
 <?php
 class PSAVehicle extends IPSModule
 {
+    
+    // ===== Debug-Schalter (bei Bedarf wieder auf false setzen) =====
+    private const PSA_DEBUG_HTTP_VERBOSE = true;           // cURL-Verbose aktivieren
+    private const PSA_DEBUG_TRACE_FILE   = '/var/lib/symcon/user/temp/psa_token_trace.txt';  // Ziel-Datei für Header+Body
+
     public function Create()
     {
         parent::Create();
@@ -2089,7 +2094,10 @@ class PSAVehicle extends IPSModule
         $challenge = $this->pkceChallengeS256($verifier);
         $state     = bin2hex(random_bytes(16));
         $this->SetBuffer("pkce_verifier", $verifier);
-        $this->SetBuffer("oauth_state",   $state);
+        $this->SetBuffer("oauth_state", $state);
+
+        // Diagnose: Zeitpunkt der Erzeugung merken
+        $this->SetBuffer("oauth_state_ts", (string)time());
 
         // 2) Properties
         $authUrlBase = rtrim($this->ReadPropertyString("AuthURL"), '/'); // z.B. .../am/oauth2/authorize
@@ -2184,6 +2192,24 @@ class PSAVehicle extends IPSModule
 
         IPS_LogMessage('PSAVehicle', 'DEBUG PKCE: computed_challenge=' . $challenge);
         //IPS_LogMessage('PSAVehicle', 'DEBUG PKCE: authorize_challenge=' . $this->ReadAttributeString('PkceChallenge'));
+
+        // --- Diagnose: POST-Body maskiert ins Log schreiben ---
+        $postFields = http_build_query($post, '', '&', PHP_QUERY_RFC3986);
+
+        // sensible Felder maskieren (nur für Log-Ausgabe)
+        $masked = $postFields;
+        $masked = preg_replace('/(\bcode=)[^&]+/i', '$1***', $masked);
+        $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
+        $masked = preg_replace('/(\bclient_id=)[^&]+/i', '$1***', $masked);
+
+        IPS_LogMessage('PSAVehicle', 'Token POST (masked): ' . $masked);
+
+        // --- Diagnose: Zeit seit Authorize-URL-Erzeugung (optional) ---
+        $tsAuth = $this->GetBuffer('oauth_state_ts');      // siehe Schritt 3 unten
+        if ($tsAuth !== '') {
+            $delta = time() - (int)$tsAuth;
+            IPS_LogMessage('PSAVehicle', 'Sekunden seit Authorize-URL-Erzeugung: ~' . $delta . 's');
+        }
 
         //$resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
         //$resp = $this->curlPostForm($tokenUrl, $post);
@@ -2364,10 +2390,22 @@ class PSAVehicle extends IPSModule
         }
         //DEBUG
         curl_setopt($ch, CURLOPT_HEADER, true);
+        curl_setopt($ch, CURLOPT_NOBODY, false);
         curl_setopt($ch, CURLOPT_VERBOSE, true);
-        $traceFile = trim($this->ReadPropertyString("CertCacheDir")) . '/curltrace.txt';
-        IPS_LogMessage("PSAVehicle", "Tracefile: " . $traceFile);
-        $trace = fopen($traceFile, 'w');
+
+        $traceFp = null;
+        if (self::PSA_DEBUG_HTTP_VERBOSE) {
+            // Trace-Datei neu anlegen/überschreiben
+            $traceFp = @fopen(self::PSA_DEBUG_TRACE_FILE, 'w');
+            if ($traceFp) {
+                // cURL-Verbose aktivieren und STDERR umleiten
+                curl_setopt($ch, CURLOPT_VERBOSE, true);
+                curl_setopt($ch, CURLOPT_STDERR, $traceFp);
+            } else {
+                IPS_LogMessage('PSAVehicle', 'WARN: Trace-Datei konnte nicht geöffnet werden: ' . self::PSA_DEBUG_TRACE_FILE);
+            }
+        }
+
         curl_setopt($ch, CURLOPT_STDERR, $trace);
         curl_setopt($ch, CURLOPT_VERBOSE, true);
 
@@ -2376,7 +2414,12 @@ class PSAVehicle extends IPSModule
         $err  = curl_error($ch);
         $eno  = curl_errno($ch);
         curl_close($ch);
-        fclose($trace);
+
+        $raw = $body;  // enthält jetzt Header + Body, weil CURLOPT_HEADER=true
+        if ($traceFp && is_string($raw)) {
+            fwrite($traceFp, "\n\n=== cURL RESPONSE (Header+Body) ===\n");
+            fwrite($traceFp, $raw);
+        }        
 
         $this->uiLog($err);
 
@@ -2384,6 +2427,10 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
         IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== '' ? $err . " (errno $eno)" : 'OK'));
         IPS_LogMessage("PSAVehicle", "Body: " . (is_string($body) ? substr($body, 0, 600) : 'kein String'));
+
+        if ($traceFp) {
+            fclose($traceFp);
+        }
 
         return [
             'ok'   => ($body !== false && $http >= 200 && $http < 300),
