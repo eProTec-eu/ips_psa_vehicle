@@ -2291,16 +2291,6 @@ class PSAVehicle extends IPSModule
                 'caption',
                 "Zeit seit Authorize-URL erzeugt: {$delta}s"
             );
-
-            $color = "#00aa00"; // grün
-            if ($delta > 55) $color = "#cc0000"; // rot
-            else if ($delta > 35) $color = "#ccaa00"; // gelb
-
-            $this->UpdateFormField(
-                'AuthAgeLabel',
-                'caption',
-                "<span style='color:$color'>Zeit seit Authorize-URL erzeugt: {$delta}s</span>"
-            );
         }
 
         //$resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
