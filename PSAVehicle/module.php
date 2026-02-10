@@ -286,6 +286,11 @@ class PSAVehicle extends IPSModule
                             "type" => "Label", 
                             "name"    => "OAuthCodeLog",
                             "caption" => ""
+                        ],
+                        [
+                            "type" => "Label",
+                            "name" => "AuthAgeLabel",
+                            "caption" => "Zeit seit Authorize-URL erzeugt: (noch nicht berechnet)"
                         ]
                     ]
                 ],
@@ -2099,6 +2104,9 @@ class PSAVehicle extends IPSModule
         // Diagnose: Zeitpunkt der Erzeugung merken
         $this->SetBuffer("oauth_state_ts", (string)time());
 
+        // UI aktualisieren
+        $this->UpdateFormField('AuthAgeLabel', 'caption', "Zeit seit Authorize-URL erzeugt: 0s");
+
         // 2) Properties
         $authUrlBase = rtrim($this->ReadPropertyString("AuthURL"), '/'); // z.B. .../am/oauth2/authorize
         $clientId    = $this->ReadPropertyString("ClientID");
@@ -2209,6 +2217,25 @@ class PSAVehicle extends IPSModule
         if ($tsAuth !== '') {
             $delta = time() - (int)$tsAuth;
             IPS_LogMessage('PSAVehicle', 'Sekunden seit Authorize-URL-Erzeugung: ~' . $delta . 's');
+        }
+        
+        if ($tsAuth !== '') {
+            $delta = time() - (int)$tsAuth;
+            $this->UpdateFormField(
+                'AuthAgeLabel',
+                'caption',
+                "Zeit seit Authorize-URL erzeugt: {$delta}s"
+            );
+
+            $color = "#00aa00"; // grün
+            if ($delta > 55) $color = "#cc0000"; // rot
+            else if ($delta > 35) $color = "#ccaa00"; // gelb
+
+            $this->UpdateFormField(
+                'AuthAgeLabel',
+                'caption',
+                "<span style='color:$color'>Zeit seit Authorize-URL erzeugt: {$delta}s</span>"
+            );
         }
 
         //$resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
