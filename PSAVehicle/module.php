@@ -2391,7 +2391,6 @@ class PSAVehicle extends IPSModule
         //DEBUG
         curl_setopt($ch, CURLOPT_HEADER, true);
         curl_setopt($ch, CURLOPT_NOBODY, false);
-        curl_setopt($ch, CURLOPT_VERBOSE, true);
 
         $traceFp = null;
         if (self::PSA_DEBUG_HTTP_VERBOSE) {
@@ -2401,13 +2400,11 @@ class PSAVehicle extends IPSModule
                 // cURL-Verbose aktivieren und STDERR umleiten
                 curl_setopt($ch, CURLOPT_VERBOSE, true);
                 curl_setopt($ch, CURLOPT_STDERR, $traceFp);
+                IPS_LogMessage('PSAVehicle', 'Trace-Datei ist geöffnet: ' . self::PSA_DEBUG_TRACE_FILE);
             } else {
                 IPS_LogMessage('PSAVehicle', 'WARN: Trace-Datei konnte nicht geöffnet werden: ' . self::PSA_DEBUG_TRACE_FILE);
             }
         }
-
-        curl_setopt($ch, CURLOPT_STDERR, $trace);
-        curl_setopt($ch, CURLOPT_VERBOSE, true);
 
         $body = curl_exec($ch);
         $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
