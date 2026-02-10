@@ -1539,21 +1539,37 @@ class PSAVehicle extends IPSModule
         $verifier = $this->GetBuffer("pkce_verifier");
         $redirect = trim($this->ReadPropertyString("RedirectURI"));
         $realm    = '/' . ltrim(trim($this->ReadPropertyString("Realm")), '/');
+        //$scope = trim($this->ReadPropertyString("Scope")) ?: 'openid profile';
 
         if ($tokenUrl === "" || $clientId === "" || $verifier === "") {
             IPS_LogMessage("PSAVehicle", "Auto-Poll: fehlende Parameter.");
             return false;
         }
 
+        // Token-URL um realm erweitern (Query)
+        $tokenUrlWithRealm = $tokenUrl . (strpos($tokenUrl, '?') === false ? '?' : '&')
+                            . 'realm=' . rawurlencode($realmVal);
+
         // OAuth2 PKCE Token Request – OHNE code (Stellantis-Internal Flow)
-        $post = [
+        /*$post = [
             'grant_type'    => 'authorization_code',
             'client_id'     => $clientId,
             'code_verifier' => $verifier,
             'redirect_uri'  => $redirect,
             'realm'         => $realm,
             'scope'         => 'openid profile'
+        ];*/
+        
+        // POST-Body für Device-Code-Grant
+        $post = [
+            'grant_type'  => 'urn:ietf:params:oauth:grant-type:device_code',
+            'device_code' => $deviceCode,
+            'client_id'   => $clientId,
+            'scope'       => $scope,
+            // optional zusätzlich:
+            'realm'       => $realmVal
         ];
+
 
         // Token holen (Smart mTLS Off)
         $resp = $this->curlPostFormSmart($tokenUrl, $post);
