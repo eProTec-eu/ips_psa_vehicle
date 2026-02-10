@@ -2202,7 +2202,7 @@ class PSAVehicle extends IPSModule
         //$this->UpdateFormField('AuthorizeUrlOpenBtn', 'enabled', true);
         
         // Auto-Poll nach Authorize-URL Erzeugung starten
-        $this->SetTimerInterval('DeviceCodePollTimer', 3000); // alle 3s schauen
+        //$this->SetTimerInterval('DeviceCodePollTimer', 3000); // alle 3s schauen
 
     }
 
