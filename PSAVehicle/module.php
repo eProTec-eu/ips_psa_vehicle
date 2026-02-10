@@ -2364,7 +2364,8 @@ class PSAVehicle extends IPSModule
         }
         //DEBUG
         curl_setopt($ch, CURLOPT_VERBOSE, true);
-        $traceFile = trim($this->ReadPropertyString("CertCacheDir")) . 'curltrace.txt';
+        $traceFile = trim($this->ReadPropertyString("CertCacheDir")) . '/curltrace.txt';
+        IPS_LogMessage("PSAVehicle", "Tracefile: " . $traceFile);
         $trace = fopen($traceFile, 'w');
         curl_setopt($ch, CURLOPT_STDERR, $trace);
         curl_setopt($ch, CURLOPT_VERBOSE, true);
