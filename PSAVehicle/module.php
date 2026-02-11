@@ -2389,6 +2389,13 @@ class PSAVehicle extends IPSModule
         // Variationen in deinem Modul: curlPostForm($url, $fields, $useMtls=false, $certPem=null, $keyPem=null, $caInfo=null)
         $resp = $this->curlPostForm($tokenUrl, $post, false, null, null, null);
 
+        // UI
+        $ageTs = $this->GetBuffer('oauth_state_ts');
+        if ($ageTs !== '') {
+            $delta = time() - (int)$ageTs;
+            $this->UpdateFormField('AuthAgeLabel', 'caption', "Zeit seit Authorize-URL erzeugt: {$delta}s");
+        }
+
         if (!$resp['ok']) {
             IPS_LogMessage("PSAVehicle", "PKCE: Token-Anforderung fehlgeschlagen: HTTP " . $resp['http'] . " | " . $resp['body']);
             $this->uiLog("Token-Fehler (" . $resp['http'] . "). Details siehe Log.");
