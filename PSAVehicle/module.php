@@ -1225,7 +1225,30 @@ class PSAVehicle extends IPSModule
         $vin = $this->ReadPropertyString("VIN");
         $clientID = $this->ReadPropertyString("ClientID");
 
-        $url = "https://api.groupe-psa.com/connectedcar/v4/vehicle/$vin";
+        // >>> FIX: Prüfen, ob alle Werte vorhanden sind <<<
+        if ($vin === "") {
+            IPS_LogMessage("PSAVehicle", "GetVehicleData: VIN fehlt!");
+            return false;
+        }
+        if ($clientID === "") {
+            IPS_LogMessage("PSAVehicle", "GetVehicleData: ClientID fehlt!");
+            return false;
+        }
+        if ($token === "") {
+            IPS_LogMessage("PSAVehicle", "GetVehicleData: AccessToken fehlt!");
+            return false;
+        }
+        if ($realm === "") {
+            IPS_LogMessage("PSAVehicle", "GetVehicleData: Realm fehlt!");
+            return false;
+        }
+
+        $url = sprintf(
+            "https://api.groupe-psa.com/connectedcar/v4/vehicle/%s",
+            rawurlencode($vin)
+        );
+
+        IPS_LogMessage("PSAVehicle", "GetVehicleData URL: " . $url);
         $params = http_build_query(["client_id" => $clientID]);
         $ch = curl_init();
         curl_setopt_array($ch, [
