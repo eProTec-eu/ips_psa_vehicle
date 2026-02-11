@@ -1532,14 +1532,15 @@ class PSAVehicle extends IPSModule
             return false;
         }
     }*/
-    public function PollDeviceCode() : bool
+    /*public function PollDeviceCode() : bool
     {
         $tokenUrl = $this->ReadPropertyString("TokenURL");
         $clientId = $this->ReadPropertyString("ClientID");
+        $deviceCode = $this->ReadAttributeString("DeviceCode")
         $verifier = $this->GetBuffer("pkce_verifier");
         $redirect = trim($this->ReadPropertyString("RedirectURI"));
-        $realm    = '/' . ltrim(trim($this->ReadPropertyString("Realm")), '/');
-        //$scope = trim($this->ReadPropertyString("Scope")) ?: 'openid profile';
+        $realmVal    = '/' . ltrim(trim($this->ReadPropertyString("Realm")), '/');
+        $scope = trim($this->ReadPropertyString("Scope")) ?: 'openid profile';
 
         if ($tokenUrl === "" || $clientId === "" || $verifier === "") {
             IPS_LogMessage("PSAVehicle", "Auto-Poll: fehlende Parameter.");
@@ -1551,14 +1552,7 @@ class PSAVehicle extends IPSModule
                             . 'realm=' . rawurlencode($realmVal);
 
         // OAuth2 PKCE Token Request – OHNE code (Stellantis-Internal Flow)
-        /*$post = [
-            'grant_type'    => 'authorization_code',
-            'client_id'     => $clientId,
-            'code_verifier' => $verifier,
-            'redirect_uri'  => $redirect,
-            'realm'         => $realm,
-            'scope'         => 'openid profile'
-        ];*/
+
         
         // POST-Body für Device-Code-Grant
         $post = [
@@ -1603,7 +1597,92 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "Auto-Poll: warte... (HTTP ".$resp['http'].")");
 
         return false;
-    }        
+    } */
+    public function PollDeviceCode(): bool
+    {
+        $tokenUrl   = trim($this->ReadPropertyString("TokenURL"));
+        $clientId   = trim($this->ReadPropertyString("ClientID"));
+        $deviceCode = $this->ReadAttributeString("DeviceCode");
+        $interval   = intval($this->ReadAttributeString("DeviceInterval") ?: 5);
+        $scope      = trim($this->ReadPropertyString("Scope") ?: "openid profile");
+
+        if ($tokenUrl === "" || $clientId === "" || $deviceCode === "") {
+            $this->SetTimerInterval("DeviceCodePollTimer", 0);
+            IPS_LogMessage("PSAVehicle", "DeviceCode/Schnittstellen fehlen – Polling abgebrochen");
+            return false;
+        }
+
+        $post = http_build_query([
+            'grant_type'  => 'urn:ietf:params:oauth:grant-type:device_code',
+            'device_code' => $deviceCode,
+            'client_id'   => $clientId,
+            'scope'       => $scope
+        ], '', '&', PHP_QUERY_RFC3986);
+
+        // KEIN mTLS beim Token-Endpoint!
+        $resp = $this->curlPostForm($tokenUrl, [
+            'grant_type'  => 'urn:ietf:params:oauth:grant-type:device_code',
+            'device_code' => $deviceCode,
+            'client_id'   => $clientId,
+            'scope'       => $scope
+        ]);
+
+        $var = $this->ensurePsaCodeVar();
+
+        // Erfolg?
+        if ($resp['http'] === 200 && is_string($resp['body'])) {
+            $json = json_decode($resp['body'], true);
+            if (isset($json['access_token'])) {
+
+                IPS_LogMessage("PSAVehicle", "Auto-Poll: Access Token erhalten!");
+
+                IPS_SetProperty($this->InstanceID, "AccessToken", $json['access_token']);
+                if (!empty($json['refresh_token'])) {
+                    IPS_SetProperty($this->InstanceID, "RefreshToken", $json['refresh_token']);
+                }
+                IPS_ApplyChanges($this->InstanceID);
+
+                SetValueString($var, "Token erhalten (gekürzt): " . substr($json['access_token'], 0, 12) . "...");
+
+                // Aufräumen
+                $this->SetTimerInterval("DeviceCodePollTimer", 0);
+                $this->WriteAttributeString("DeviceCode", "");
+                $this->WriteAttributeString("DeviceInterval", "");
+
+                return true;
+            }
+        }
+
+        // Fehlerbehandlung
+        if (is_string($resp['body'])) {
+            $err = json_decode($resp['body'], true);
+
+            // 1) Nutzer hat noch nicht bestätigt
+            if (($err['error'] ?? '') === 'authorization_pending') {
+                SetValueString($var, "Warte auf Bestätigung...");
+                return false;
+            }
+
+            // 2) Server verlangt langsameres Polling
+            if (($err['error'] ?? '') === 'slow_down') {
+                $interval += 2;
+                $this->WriteAttributeString("DeviceInterval", (string)$interval);
+                $this->SetTimerInterval("DeviceCodePollTimer", $interval * 1000);
+                SetValueString($var, "Server verlangsamte Polling: neuer Intervall = {$interval}s");
+                return false;
+            }
+
+            // 3) andere Fehler → Polling abbrechen
+            SetValueString($var, "Fehler: " . ($err['error'] ?? 'Unbekannt') . " – Polling beendet.");
+        }
+
+        $this->SetTimerInterval("DeviceCodePollTimer", 0);
+        $this->WriteAttributeString("DeviceCode", "");
+        $this->WriteAttributeString("DeviceInterval", "");
+
+        return false;
+    }
+       
 
     // Manuelles Stoppen des Timers/Flows.
     public function StopDeviceCodePolling(): void
@@ -2246,8 +2325,100 @@ class PSAVehicle extends IPSModule
     {
         IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): ".$this->ReadPropertyString("AuthorizeUrlDecoded"));
     } 
-    
     public function ActionSubmitOAuthCode(): bool
+    {
+        $this->uiLog("");
+
+        // --- Eingaben/Buffer ---
+        $rawInput  = trim($this->ReadPropertyString("OAuthCode")); // kann "nur code" ODER komplette Redirect-URL sein
+        $pkce      = $this->GetBuffer("pkce_verifier");
+        $expectSt  = $this->GetBuffer("oauth_state");              // state, den wir in der Authorize-URL vergeben haben
+        $tokenUrl  = trim($this->ReadPropertyString("TokenURL"));
+        $clientId  = trim($this->ReadPropertyString("ClientID"));
+        $redirect  = trim($this->ReadPropertyString("RedirectURI"));
+        $realmProp = trim($this->ReadPropertyString("Realm"));
+
+        if ($tokenUrl === "" || $clientId === "" || $redirect === "") {
+            IPS_LogMessage("PSAVehicle", "PKCE: TokenURL, ClientID oder RedirectURI fehlt.");
+            return false;
+        }
+        if ($pkce === "") {
+            IPS_LogMessage("PSAVehicle", "PKCE: Kein code_verifier im Buffer. Bitte Authorize-URL neu erzeugen.");
+            return false;
+        }
+
+        // --- Code extrahieren & optional "state" prüfen ---
+        $parsed = $this->extractCodeFromInput($rawInput);
+        $code   = $parsed['code'];
+        $seenSt = $parsed['state'];
+
+        if ($code === "") {
+            IPS_LogMessage("PSAVehicle", "PKCE: Kein gültiger Code gefunden (Eingabe leer oder ohne code=).");
+            return false;
+        }
+
+        // Optionaler State-Check (nur wenn wir aus Redirect-URL kommen)
+        if ($seenSt !== null && $expectSt !== "" && !hash_equals($expectSt, $seenSt)) {
+            IPS_LogMessage("PSAVehicle", "PKCE: STATE mismatch – Abbruch aus Sicherheitsgründen.");
+            $this->uiLog("STATE-Mismatch. Bitte Authorize-Flow erneut starten.");
+            return false;
+        }
+
+        // --- Token-URL inkl. realm aufbauen (ForgeRock/AM erwartet realm als Query-Param) ---
+        $tokenUrl = $this->buildTokenUrlWithRealm($tokenUrl, $realmProp);
+
+        // --- POST-Body (kein client_secret – Public Client mit PKCE) ---
+        $post = [
+            'grant_type'   => 'authorization_code',
+            'code'         => $code,
+            'redirect_uri' => $redirect,
+            'client_id'    => $clientId,
+            'code_verifier'=> $pkce
+        ];
+
+        // --- Logging (maskiert) ---
+        $masked = http_build_query($post, '', '&', PHP_QUERY_RFC3986);
+        $masked = preg_replace('/(\bcode=)[^&]+/i', '$1***', $masked);
+        $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
+        $masked = preg_replace('/(\bclient_id=)[^&]+/i', '$1***', $masked);
+        IPS_LogMessage('PSAVehicle', 'PKCE Token POST (masked): ' . $masked);
+
+        // --- Token holen: KEIN mTLS am Token-Endpoint! ---
+        // Nutze deine einfache curlPostForm(...) – falls deine Signatur anders ist, anpassen:
+        // Variationen in deinem Modul: curlPostForm($url, $fields, $useMtls=false, $certPem=null, $keyPem=null, $caInfo=null)
+        $resp = $this->curlPostForm($tokenUrl, $post, false, null, null, null);
+
+        if (!$resp['ok']) {
+            IPS_LogMessage("PSAVehicle", "PKCE: Token-Anforderung fehlgeschlagen: HTTP " . $resp['http'] . " | " . $resp['body']);
+            $this->uiLog("Token-Fehler (" . $resp['http'] . "). Details siehe Log.");
+            return false;
+        }
+
+        $json = json_decode($resp['body'], true);
+        if (!is_array($json) || empty($json['access_token'])) {
+            IPS_LogMessage("PSAVehicle", "PKCE: Unerwartete Antwort: " . $resp['body']);
+            $this->uiLog("Antwort ohne access_token. Details siehe Log.");
+            return false;
+        }
+
+        // --- Token speichern ---
+        IPS_SetProperty($this->InstanceID, "AccessToken", $json['access_token']);
+        if (!empty($json['refresh_token'])) {
+            IPS_SetProperty($this->InstanceID, "RefreshToken", $json['refresh_token']);
+        }
+        IPS_ApplyChanges($this->InstanceID);
+
+        // UI
+        $this->uiLog("AccessToken erhalten (gekürzt): " . substr($json['access_token'], 0, 12) . "…");
+        $ageTs = $this->GetBuffer('oauth_state_ts');
+        if ($ageTs !== '') {
+            $delta = time() - (int)$ageTs;
+            $this->UpdateFormField('AuthAgeLabel', 'caption', "Zeit seit Authorize-URL erzeugt: {$delta}s");
+        }
+
+        return true;
+    }
+    /*public function ActionSubmitOAuthCode(): bool
     {
         $this->uiLog("");
         $code = trim($this->ReadPropertyString("OAuthCode"));
@@ -2339,9 +2510,8 @@ class PSAVehicle extends IPSModule
 
         IPS_LogMessage("PSAVehicle","OAuth: Token gespeichert. Expires_in=".($json['expires_in'] ?? 'n/a'));
         return true;
-    }
-/*
-    private function curlPostForm(string $url, array $fields, string $certPem = null, string $keyPem = null): array
+    }*/
+    /*private function curlPostForm(string $url, array $fields, string $certPem = null, string $keyPem = null): array
     {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -2373,61 +2543,37 @@ class PSAVehicle extends IPSModule
         return ['ok' => ($body !== false && $http >= 200 && $http < 300), 'body' => $body ?: $err, 'http' => $http];
     } */
    
-    private function curlPostForm(
-        string $url,
-        array $fields,
-        bool $useMtls = false,
-        ?string $certPem = null,
-        ?string $keyPem  = null,
-        ?string $caInfo  = null
-    ): array
+    private function curlPostForm(string $url, array $fields): array
     {
-        // x-www-form-urlencoded – wichtig: RFC3986 (kein '+' für Leerzeichen)
         $postFields = http_build_query($fields, '', '&', PHP_QUERY_RFC3986);
 
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => $postFields,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
             CURLOPT_HTTPHEADER     => [
                 'Content-Type: application/x-www-form-urlencoded',
                 'Accept: application/json'
             ],
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 30,
-            // CA-Store setzen (Linux). Unter Windows z.B. __DIR__ . '/cacert.pem'
-            CURLOPT_CAINFO         => $caInfo ?: '/etc/ssl/certs/ca-certificates.crt',
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_CAINFO         => '/etc/ssl/certs/ca-certificates.crt'
         ]);
 
-        // mTLS NUR wenn explizit erlaubt – niemals für /am/oauth2/access_token!
-        if ($useMtls) {
-            if (!$certPem || !$keyPem) {
-                curl_close($ch);
-                return ['ok' => false, 'body' => 'mTLS aktiviert, aber Zertifikat/Key fehlen', 'http' => 0];
-            }
-            curl_setopt($ch, CURLOPT_SSLCERT, $certPem);
-            curl_setopt($ch, CURLOPT_SSLKEY,  $keyPem);
-        }
-
         $body = curl_exec($ch);
-        $http = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err  = curl_error($ch);
-        $eno  = curl_errno($ch);
-        curl_close($ch);
 
-        // Logging – achte darauf, keine Secrets zu loggen
-        IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
-        IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== '' ? $err . " (errno $eno)" : 'OK'));
-        IPS_LogMessage("PSAVehicle", "Body: " . (is_string($body) ? substr($body, 0, 600) : 'kein String'));
+        curl_close($ch);
 
         return [
             'ok'   => ($body !== false && $http >= 200 && $http < 300),
             'body' => $body !== false ? $body : $err,
             'http' => $http
         ];
-    }   
+    } 
     
     private function curlPostFormSmart(
         string $url,
@@ -2997,7 +3143,7 @@ class PSAVehicle extends IPSModule
     private function uiLog(string $txt): void
     { $this->UpdateFormField('OAuthCodeLog', 'caption', $txt); }
 
-    public function StartAutoPolling() : bool
+    /*public function StartAutoPolling() : bool
     {
         // 1) Authorize-URL erzeugen (inkl. PKCE)
         $this->ActionGenerateAuthorizeUrl();
@@ -3012,6 +3158,87 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "Autopolling gestartet – alle {$intervalMs} ms wird geprüft.");
 
         return true;
-    }
+    }*/
+    public function StartAutoPolling(): bool
+    {
+        $deviceUrl = trim($this->ReadPropertyString("DeviceURL"));
+        $clientId  = trim($this->ReadPropertyString("ClientID"));
+        $scope     = trim($this->ReadPropertyString("Scope") ?: "openid profile");
 
+        if ($deviceUrl === "" || $clientId === "") {
+            IPS_LogMessage("PSAVehicle", "Auto-Poll: DeviceURL oder ClientID fehlt.");
+            return false;
+        }
+
+        // Schritt 1: Device-Code anfordern
+        $post = http_build_query([
+            'client_id' => $clientId,
+            'scope'     => $scope
+        ], '', '&', PHP_QUERY_RFC3986);
+
+        $ch = curl_init($deviceUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $post,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
+            CURLOPT_TIMEOUT        => 30
+        ]);
+
+        $resp = curl_exec($ch);
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($resp === false || $http !== 200) {
+            IPS_LogMessage("PSAVehicle", "Auto-Poll: Device-Code-Request fehlgeschlagen ($http): $resp");
+            return false;
+        }
+
+        $json = json_decode($resp, true);
+        if (!isset($json["device_code"], $json["user_code"])) {
+            IPS_LogMessage("PSAVehicle", "Auto-Poll: Device-Code unvollständig: $resp");
+            return false;
+        }
+
+        // Alles speichern
+        $this->WriteAttributeString("DeviceCode", $json["device_code"]);
+        $interval = intval($json["interval"] ?? 5);
+        $this->WriteAttributeString("DeviceInterval", (string)$interval);
+
+        // Benutzerinfo ausgeben
+        $var = $this->ensurePsaCodeVar();
+        SetValueString($var,
+            "Bitte autorisieren:\n" .
+            ($json["verification_uri_complete"] ?? $json["verification_uri"]) . "\n" .
+            "Code: " . $json["user_code"]
+        );
+
+        // Timer starten
+        $this->SetTimerInterval("DeviceCodePollTimer", max(3000, $interval * 1000));
+
+        IPS_LogMessage("PSAVehicle", "Auto-Poll gestartet. Intervall: $interval sec");
+        return true;
+    }    
+    private function extractCodeFromInput(string $input): array
+    {
+        // Rückgabe: ['code' => string, 'state' => string|null]
+        $input = trim($input);
+        if ($input === '') return ['code' => '', 'state' => null];
+
+        // Falls Nutzer die komplette Redirect-URL eingefügt hat:
+        if (stripos($input, 'http://') === 0 || stripos($input, 'https://') === 0 || strpos($input, '://') !== false) {
+            $parts = parse_url($input);
+            if (!isset($parts['query'])) {
+                // Einige mobilen Schemes übergeben evtl. ? im Fragment:
+                if (!isset($parts['fragment'])) return ['code' => '', 'state' => null];
+                parse_str($parts['fragment'], $frag);
+                return ['code' => ($frag['code'] ?? ''), 'state' => ($frag['state'] ?? null)];
+            }
+            parse_str($parts['query'], $q);
+            return ['code' => ($q['code'] ?? ''), 'state' => ($q['state'] ?? null)];
+        }
+
+        // Andernfalls: Benutzer hat nur den Code eingefügt
+        return ['code' => $input, 'state' => null];
+    }
 }
