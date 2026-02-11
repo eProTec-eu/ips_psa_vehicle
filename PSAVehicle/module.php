@@ -284,11 +284,6 @@ class PSAVehicle extends IPSModule
                             "onClick" => 'PSAVehicle_ActionSubmitOAuthCode($id);'
                         ],
                         [
-                            "type" => "Label", 
-                            "name"    => "OAuthCodeLog",
-                            "caption" => ""
-                        ],
-                        [
                             "type" => "Label",
                             "name" => "AuthAgeLabel",
                             "caption" => "Zeit seit Authorize-URL erzeugt: (noch nicht berechnet)"
@@ -305,11 +300,32 @@ class PSAVehicle extends IPSModule
                         ["type" => "Label", "caption" => "• Absolute Pfade & Leserechte sicherstellen (Private Keys restriktiv, z. B. 0600)."],
                         ["type" => "Label", "caption" => "• Bei P12/PFX ist meist ein Passwort notwendig."]
                     ]
+                ],
+                [
+                    "type" => "Label", 
+                    "name"    => "PSAVehicleLog",
+                    "caption" => ""
                 ]
             ],
 
             // Aktionen
-            "actions" => [              
+            "actions" => [   
+                [
+                    "type"     => "PopupButton",
+                    "caption"  => "Hilfe / README (Popup)",
+                    "popup"    => [
+                        "caption"      => "Modulhilfe",
+                        "closeCaption" => "Schließen",
+                        "items"        => [
+                            [
+                                "type"    => "Label",
+                                "name"    => "HelpHtml",
+                                "caption" => "README wird geladen..."
+                            ]
+                        ]
+                    ],
+                    "onClick"  => "PSAVehicle_ShowHelp($id);"
+                ],           
                 [
                 "type"   => "Button",
                 "label"  => "PSA Code abfragen",
@@ -349,10 +365,6 @@ class PSAVehicle extends IPSModule
                     "type" => "Button",
                     "label" => "TLS-Handschlag testen (optional)",
                     "onClick" => 'PSAVehicle_TestTlsHandshake($id);'
-                ],
-                [
-                    "type" => "Label",
-                    "caption" => "Der TLS-Test erfordert die Implementierung von TestTlsHandshake() im Modul."
                 ]
             ]
         ];
@@ -456,13 +468,6 @@ class PSAVehicle extends IPSModule
             return false;
         }
 
-        /*/ 4) GitHub Releases: neueste Version abfragen & Asset-URL (browser_download_url) für <brand>.apk finden
-        $release = $this->githubGetLatestRelease("flobz", "psa_car_controller");
-        if ($release === null || empty($release['assets'])) {
-            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine Release-Assets gefunden.");
-            return false;
-        }*/
-
         // 4) Download-URL über beide Repos auflösen
         // neu (durchsucht mehrere Releases in beiden Repos):
         $downloadUrl = $this->resolveFlobzApkDownloadUrlDeep($apkFileName, 8);
@@ -488,32 +493,7 @@ class PSAVehicle extends IPSModule
             return false;
         }
 
-/*
-        if ($downloadUrl === null) {
-            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Keine passende APK in psa_apk/psa_car_controller über die letzten 8 Releases.");
-            // Optional: Fallback auf eine manuell hinterlegte APK-URL (Property) oder APKMirror
-            return false;
-        }
 
-        $downloadUrl = null;
-        foreach ($release['assets'] as $asset) {
-            // GitHub liefert: name, browser_download_url, ...
-            if (isset($asset['name']) && strtolower($asset['name']) === strtolower($apkFileName)) {
-                $downloadUrl = $asset['browser_download_url'] ?? null;
-                break;
-            }
-        }
-        if ($downloadUrl === null) {
-            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: Asset {$apkFileName} nicht im neuesten Release gefunden.");
-            return false;
-        }
-
-        // 5) APK herunterladen
-        $apkPath = $cacheDir . "/" . $apkFileName;
-        if (!$this->downloadFile($downloadUrl, $apkPath, 60)) {
-            IPS_LogMessage("PSAVehicle", "FetchFlobzApkAndCerts: APK-Download fehlgeschlagen: {$downloadUrl}");
-            return false;
-        }*/
 
         // 6) PFX aus APK extrahieren → PEMs gewinnen (nutzt deine bestehende Routine)
         try {
@@ -805,43 +785,7 @@ class PSAVehicle extends IPSModule
         }
         IPS_LogMessage("PSAVehicle", "Unzip fehlgeschlagen!");
         return null;
-        // Wenn extern nicht möglich/fehlgeschlagen: reiner PHP-Decoder als Fallback
-        /*$ok = $this->bunzip2Pure($tmpBz2, $outApk);
-        @unlink($tmpBz2);
-        if (!$ok) {
-            IPS_LogMessage("PSAVehicle", "RawFallback: Dekomprimierung fehlgeschlagen: " . basename($srcBz2));
-            @unlink($outApk);
-            return null;
         
-
-        $size = @filesize($outApk);
-        if ($size === false || $size < 1024*100) {
-            IPS_LogMessage("PSAVehicle", "RawFallback: APK verdächtig klein ({$size} Bytes). Abbruch.");
-            @unlink($outApk);
-            return null;
-        }
-        @chmod($outApk, 0600);
-        return $outApk;
-        
-        // $tmpBz2 (geladen) → $outApk
-        $ok = $this->bunzip2Pure($tmpBz2, $outApk);
-
-        if (!$ok) {
-            IPS_LogMessage("PSAVehicle", "RawFallback: Dekomprimierung fehlgeschlagen: {$bz2}");
-            @unlink($outApk);
-            return null;
-        }
-
-        // Grundcheck .apk – mind. ~1 MB groß
-        $size = @filesize($outApk);
-        if ($size === false || $size < 1024 * 1024) {
-            IPS_LogMessage("PSAVehicle", "RawFallback: APK verdächtig klein ({$size} Bytes). Abbruch.");
-            @unlink($outApk);
-            return null;
-        }
-
-        IPS_LogMessage("PSAVehicle", "RawFallback: APK bereit: {$outApk} (".number_format($size)." Bytes)");
-        return $outApk;*/
     }
 
     /**
@@ -1323,27 +1267,32 @@ class PSAVehicle extends IPSModule
         // PSA Fehlercodes interpretieren
         if ($http === 401) {
             IPS_LogMessage("PSAVehicle","401 Unauthorized – Token ungültig / abgelaufen.");
+            $this->uiLog("401 Unauthorized – Token ungültig / abgelaufen.");
             return false;
         }
 
         if ($http === 403) {
             IPS_LogMessage("PSAVehicle","403 Forbidden – Fahrzeugzugriff verweigert (PSA Backend).");
             IPS_LogMessage("PSAVehicle","Ursachen: Zertifikat falsch, App nicht berechtigt, falsche Marke.");
+            $this->uiLog("403 Forbidden – Fahrzeugzugriff verweigert (PSA Backend).");
             return false;
         }
 
         if ($http === 404) {
             IPS_LogMessage("PSAVehicle","404 Vehicle not found – VIN nicht registriert.");
+            $this->uiLog("404 Vehicle not found – VIN nicht registriert.");
             return false;
         }
 
         if ($http === 423) {
             IPS_LogMessage("PSAVehicle","423 Locked – Fahrzeug im Sleep Mode.");
+            $this->uiLog("PSAVehicle","423 Locked – Fahrzeug im Sleep Mode.");
             return false;
         }
 
         if ($http !== 200) {
             IPS_LogMessage("PSAVehicle","API Fehler $http: ".$body);
+            $this->uiLog("PSAVehicle","API Fehler $http: ".$body);
             return false;
         }
 
@@ -1527,167 +1476,6 @@ class PSAVehicle extends IPSModule
         return true;
     }
 
-    // Pollt den Device-Code-Endpunkt zum Token-Exchange (einzelner Poll-Durchlauf).
-    /*public function PollDeviceCode(): bool
-    {
-        $tokenUrl   = trim($this->ReadPropertyString("TokenURL"));
-        $clientId   = trim($this->ReadPropertyString("ClientID"));
-        $deviceCode = $this->ReadAttributeString("DeviceCode");
-        $interval   = max(3, intval($this->ReadAttributeString("DeviceInterval") ?: "5"));
-
-        if ($deviceCode === "") {
-            // Nichts zu tun: Timer aus
-            $this->SetTimerInterval('DeviceCodePollTimer', 0);
-            return false;
-        }
-
-        if ($tokenUrl === "" || $clientId === "" || $deviceCode === "") {
-            IPS_LogMessage("PSAVehicle","PollDeviceCode: TokenURL/ClientID/DeviceCode fehlt.");
-            return false;
-        }
-
-        $post = http_build_query([
-            'grant_type'  => 'urn:ietf:params:oauth:grant-type:device_code',
-            'device_code' => $deviceCode,
-            'client_id'   => $clientId,
-        ]);
-
-        $ch = curl_init($tokenUrl);
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $post,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
-        ]);
-
-        try { $this->configureCurlMtls($ch); } catch (\Throwable $e) { IPS_LogMessage("PSAVehicle","PollDeviceCode TLS optional: ".$e->getMessage()); }
-
-        $resp = curl_exec($ch);
-        if ($resp === false) {
-            IPS_LogMessage("PSAVehicle","PollDeviceCode: cURL Fehler: " . curl_error($ch));
-            curl_close($ch);
-            return false;
-        }
-        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-
-        if ($http === 200) {
-            $json = json_decode($resp, true);
-            $accessToken  = $json['access_token'] ?? null;
-            $refreshToken = $json['refresh_token'] ?? null;
-            $expiresIn    = $json['expires_in'] ?? null;
-
-            if (!$accessToken) {
-                IPS_LogMessage("PSAVehicle","PollDeviceCode: access_token fehlt.");
-                return false;
-            }
-            IPS_SetProperty($this->InstanceID, "AccessToken", $accessToken);
-            IPS_ApplyChanges($this->InstanceID);
-            if (!empty($refreshToken)) {
-                $this->RegisterAttributeString("RefreshToken", $refreshToken);
-                $this->WriteAttributeString("RefreshToken", $refreshToken);
-            }
-            $varId = $this->ensurePsaCodeVar();
-            SetValueString($varId, "AccessToken erhalten (gekürzt): " . substr($accessToken, 0, 16) . "...; Expires in: " . ($expiresIn ?? '?') . "s");
-
-            // Aufräumen & Timer stoppen
-            $this->SetTimerInterval('DeviceCodePollTimer', 0);
-            $this->WriteAttributeString("DeviceCode", "");
-            $this->WriteAttributeString("DeviceInterval", "");
-            return true;
-        }
-
-        $err = json_decode($resp, true);
-        $errCode = $err['error'] ?? '';
-        $varId = $this->ensurePsaCodeVar();
-
-        if ($errCode === 'authorization_pending') {
-            SetValueString($varId, "Warte auf Bestätigung... (erneut in {$interval}s per Timer)");
-            // sicherstellen, dass Timer aktiv ist
-            $this->SetTimerInterval('DeviceCodePollTimer', max(3000, $interval * 1000));
-            return false;
-        } elseif ($errCode === 'slow_down') {
-            $interval = $interval + 2;
-            $this->WriteAttributeString("DeviceInterval", (string)$interval);
-            SetValueString($varId, "Server verlangsamte Polling. Neues Intervall: {$interval}s");
-            $this->SetTimerInterval('DeviceCodePollTimer', max(3000, $interval * 1000));
-            return false;
-        } else {
-            IPS_LogMessage("PSAVehicle", "PollDeviceCode: Fehler: $resp");
-            SetValueString($varId, "Fehler: " . ($errCode ?: 'unbekannt') . " – Polling gestoppt.");
-            $this->SetTimerInterval('DeviceCodePollTimer', 0);
-            $this->WriteAttributeString("DeviceCode", "");
-            $this->WriteAttributeString("DeviceInterval", "");
-            return false;
-        }
-    }*/
-    /*public function PollDeviceCode() : bool
-    {
-        $tokenUrl = $this->ReadPropertyString("TokenURL");
-        $clientId = $this->ReadPropertyString("ClientID");
-        $deviceCode = $this->ReadAttributeString("DeviceCode")
-        $verifier = $this->GetBuffer("pkce_verifier");
-        $redirect = trim($this->ReadPropertyString("RedirectURI"));
-        $realmVal    = '/' . ltrim(trim($this->ReadPropertyString("Realm")), '/');
-        $scope = trim($this->ReadPropertyString("Scope")) ?: 'openid profile';
-
-        if ($tokenUrl === "" || $clientId === "" || $verifier === "") {
-            IPS_LogMessage("PSAVehicle", "Auto-Poll: fehlende Parameter.");
-            return false;
-        }
-
-        // Token-URL um realm erweitern (Query)
-        $tokenUrlWithRealm = $tokenUrl . (strpos($tokenUrl, '?') === false ? '?' : '&')
-                            . 'realm=' . rawurlencode($realmVal);
-
-        // OAuth2 PKCE Token Request – OHNE code (Stellantis-Internal Flow)
-
-        
-        // POST-Body für Device-Code-Grant
-        $post = [
-            'grant_type'  => 'urn:ietf:params:oauth:grant-type:device_code',
-            'device_code' => $deviceCode,
-            'client_id'   => $clientId,
-            'scope'       => $scope,
-            // optional zusätzlich:
-            'realm'       => $realmVal
-        ];
-
-
-        // Token holen (Smart mTLS Off)
-        $resp = $this->curlPostFormSmart($tokenUrl, $post);
-
-        // Erfolg?
-        if ($resp['http'] === 200 && is_string($resp['body'])) {
-
-            $json = json_decode($resp['body'], true);
-
-            if (is_array($json) && isset($json['access_token'])) {
-
-                IPS_LogMessage("PSAVehicle", "Auto-Poll: Token erhalten!");
-
-                // Speichern
-                IPS_SetProperty($this->InstanceID, "AccessToken", $json['access_token']);
-
-                if (!empty($json['refresh_token'])) {
-                    IPS_SetProperty($this->InstanceID, "RefreshToken", $json['refresh_token']);
-                }
-
-                IPS_ApplyChanges($this->InstanceID);
-
-                // Poll stoppen
-                $this->SetTimerInterval("DeviceCodePollTimer", 0);
-
-                return true;
-            }
-        }
-
-        // Noch kein Token
-        IPS_LogMessage("PSAVehicle", "Auto-Poll: warte... (HTTP ".$resp['http'].")");
-
-        return false;
-    } */
     public function PollDeviceCode(): bool
     {
         $tokenUrl   = trim($this->ReadPropertyString("TokenURL"));
@@ -1796,363 +1584,6 @@ class PSAVehicle extends IPSModule
         }
         return $varId;
     }
-
-    /**
-     * Reiner PHP-BZip2-Decoder (ohne ext/bz2).
-     * Unterstützt: BZh-Streams, Standardblöcke (1..9), kein "randomised" Modus.
-     * Schreibt den dekomprimierten Strom nach $dstFile. Liefert true/false.
-     *
-     * Quelle/Referenz (Format/Algorithmus-Überblick):
-     *  - bzip2 arbeitet mit BWT → Move-To-Front → Huffman → RLE; Header 'BZh' mit Blockgröße 1..9 (100..900kB).
-     *  - Stream: 4-Byte-Header, 0..n Blöcke, Endmarker mit Stream-CRC. [1](https://en.wikipedia.org/wiki/Bzip2)[2](https://www.loc.gov/preservation/digital/formats/fdd/fdd000600.shtml)
-     *  - Praktische Wire-Format-Bits/Blockmagics sind in der Wuffs-Doc illustriert. [3](https://github.com/google/wuffs/blob/f1698226806569eb45ea009deee89a108f8d5395/std/bzip2/README.md)
-     */
-    /*
-    private function bunzip2Pure(string $srcBz2, string $dstFile, bool $verifyCrc = false): bool
-    {
-        $in = @fopen($srcBz2, 'rb');
-        if (!$in) {
-            IPS_LogMessage("PSAVehicle", "bunzip2Pure: Quelle nicht lesbar: $srcBz2");
-            return false;
-        }
-        $out = @fopen($dstFile, 'wb');
-        if (!$out) {
-            fclose($in);
-            IPS_LogMessage("PSAVehicle", "bunzip2Pure: Ziel nicht schreibbar: $dstFile");
-            return false;
-        }
-
-        $br = new class($in)
-        {
-            private $fp;
-            private int $buf = 0;
-            private int $nbits = 0;
-            public function __construct($fp){ $this->fp = $fp; }
-            public function readBytes(int $n): string {
-                $this->nbits = 0; $this->buf = 0;
-                $data = '';
-                while (strlen($data) < $n) {
-                    $chunk = fread($this->fp, $n - strlen($data));
-                    if ($chunk === '' || $chunk === false) break;
-                    $data .= $chunk;
-                }
-                return $data;
-            }
-            public function readU8(): ?int { $b = $this->readBytes(1); return ($b === '' ? null : ord($b)); }
-            public function readBits(int $n): ?int {
-                $v = 0;
-                while ($n > 0) {
-                    if ($this->nbits === 0) {
-                        $b = fgetc($this->fp);
-                        if ($b === false) return null;
-                        $this->buf = ord($b);
-                        $this->nbits = 8;
-                    }
-                    $take = ($n < $this->nbits) ? $n : $this->nbits;
-                    // MSB-first
-                    $shift = $this->nbits - $take;
-                    $mask = ((1 << $take) - 1) << $shift;
-                    $v = ($v << $take) | (($this->buf & $mask) >> $shift);
-                    $this->nbits -= $take;
-                    $this->buf &= (1 << $this->nbits) - 1;
-                    $n -= $take;
-                }
-                return $v;
-            }
-            public function alignByte(): void { $this->nbits = 0; $this->buf = 0; }
-        };
-
-        // --- Header: "BZh" + block size char '1'..'9'
-        $hdr = $br->readBytes(3);
-        if ($hdr !== "BZh") {
-            fclose($in); fclose($out);
-            IPS_LogMessage("PSAVehicle", "bunzip2Pure: Ungültiger Header (kein BZh)");
-            return false;
-        }
-        $blkChar = $br->readU8();
-        if ($blkChar === null || $blkChar < ord('1') || $blkChar > ord('9')) {
-            fclose($in); fclose($out);
-            IPS_LogMessage("PSAVehicle", "bunzip2Pure: Ungültige Blockgröße.");
-            return false;
-        }
-        $blockSize100k = (int)(chr($blkChar));
-        // bzip2 ist bitorientiert; wir lesen ab hier in Bits weiter (br.readBits)
-
-        // Konstanten (Block- & EOS-Magics in Bits, siehe Wire-Format-Beispiele) [3](https://github.com/google/wuffs/blob/f1698226806569eb45ea009deee89a108f8d5395/std/bzip2/README.md)
-        // Block-Magic 48 Bit: 0x314159265359 ("pi") → Bits: 00110001 01000001 01011001 00100110 01010011 01011001
-        // EOS-Magic   48 Bit: 0x177245385090
-        $BLOCK_MAGIC = [0x31,0x41,0x59,0x26,0x53,0x59]; // "1AY&SY"
-        $EOS_MAGIC   = [0x17,0x72,0x45,0x38,0x50,0x90];
-
-        // Hilfe-Funktionen
-        $read48 = function() use ($br): ?array {
-            $b = $br->readBytes(6);
-            if (strlen($b) !== 6) return null;
-            return [ord($b[0]),ord($b[1]),ord($b[2]),ord($b[3]),ord($b[4]),ord($b[5])];
-        };
-        $eqArr = fn($a,$b) => $a!==null && count($a)===count($b) && !array_diff_assoc($a,$b);
-
-        $streamCrc = 0;
-        $writtenTotal = 0;
-
-        // --- Blockschleife
-        for (;;) {
-            $br->alignByte(); // Spezifikationsgemäß bitbasiert; vor den 6 Byte Magics ausrichten.
-            $sig = $read48();
-            if ($sig === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: Unerwartetes Streamende."); return false; }
-
-            if ($eqArr($sig, $BLOCK_MAGIC)) {
-                // Block Header: 32-bit Block CRC, 1-bit randomised (deprecated; wir unterstützen nur 0)
-                $crc = ($br->readU8()<<24)|($br->readU8()<<16)|($br->readU8()<<8)|($br->readU8());
-                $rand = $br->readBits(1);
-                if ($rand !== 0) {
-                    fclose($in); fclose($out);
-                    IPS_LogMessage("PSAVehicle", "bunzip2Pure: randomised-Blocks werden nicht unterstützt.");
-                    return false;
-                }
-
-                // --- Block Header ist gelesen: block CRC (32 Bit) und randomised Flag (1 Bit)
-                // RICHTIGE REIHENFOLGE: origPtr (24 Bit) → InUse-Map → Gruppen/Selectoren
-
-                // 1) origPtr (24 Bit) – Position für inverse BWT
-                $origPtr = ($br->readBits(8) << 16) | ($br->readBits(8) << 8) | ($br->readBits(8));
-                if ($origPtr === null || $origPtr < 0) {
-                    fclose($in); fclose($out);
-                    IPS_LogMessage("PSAVehicle", "bunzip2Pure: origPtr ungültig.");
-                    return false;
-                }
-
-                // 2) InUse-Map (16 Flags + ggf. 16×16 Detailbits) → Alphabet aufbauen
-                $inUse16 = [];
-                for ($i = 0; $i < 16; $i++) $inUse16[$i] = $br->readBits(1);
-
-                $inUse = array_fill(0, 256, 0);
-                for ($i = 0; $i < 16; $i++) {
-                    if ($inUse16[$i]) {
-                        for ($j = 0; $j < 16; $j++) {
-                            $bit = $br->readBits(1);
-                            if ($bit === null) {
-                                fclose($in); fclose($out);
-                                IPS_LogMessage("PSAVehicle", "bunzip2Pure: InUse-Map unvollständig.");
-                                return false;
-                            }
-                            $inUse[($i << 4) | $j] = $bit;
-                        }
-                    }
-                }
-
-                $seqToUnseq = [];
-                for ($i = 0; $i < 256; $i++) {
-                    if ($inUse[$i]) $seqToUnseq[] = $i;
-                }
-                $nInUse = count($seqToUnseq);
-                if ($nInUse === 0) {
-                    fclose($in); fclose($out);
-                    IPS_LogMessage("PSAVehicle", "bunzip2Pure: nInUse=0.");
-                    return false;
-                }
-
-                // 3) Gruppen/Selectoren
-                $nGroups    = $br->readBits(3);    // 2..6
-                $nSelectors = $br->readBits(15);   // typ. bis ~18002 (ceil(nSymbols/50))
-                if ($nGroups === null || $nSelectors === null ||
-                    $nGroups < 2 || $nGroups > 6 || $nSelectors <= 0 || $nSelectors > 20000) {
-                    fclose($in); fclose($out);
-                    IPS_LogMessage("PSAVehicle", "bunzip2Pure: Ungültige Gruppen-/Selectoranzahl (g={$nGroups}, s={$nSelectors}).");
-                    return false;
-                }
-                // MTF-kodierte Selectors (0..nGroups-1), mit Vorläufer-Läufen („zero bit runs“)
-                $selectors = [];
-                // Start-MTF-Liste: 0..nGroups-1
-                $mtf = range(0, $nGroups-1);
-                for ($i=0;$i<$nSelectors;$i++) {
-                    $cnt=0;
-                    while (($bit = $br->readBits(1)) === 1) $cnt++;
-                    // MTF: Element an Position $cnt nach vorn
-                    $sym = $mtf[$cnt];
-                    array_splice($mtf, $cnt, 1);
-                    array_unshift($mtf, $sym);
-                    $selectors[$i] = $sym;
-                }
-
-                // --- Huffman-Code-Längen pro Gruppe
-                $alphaSize = $nInUse + 2; // +RUNA/+RUNB
-                $len = [];
-                for ($g=0;$g<$nGroups;$g++) {
-                    $len[$g] = array_fill(0,$alphaSize,0);
-                    $cur = $br->readBits(5); // initial length
-                    for ($i=0;$i<$alphaSize;$i++) {
-                        while (true) {
-                            $b = $br->readBits(1);
-                            if ($b === 0) break;
-                            $b2 = $br->readBits(1);
-                            $cur += ($b2===0) ? -1 : +1;
-                        }
-                        $len[$g][$i] = $cur;
-                    }
-                }
-
-                // --- Huffman-Tables bauen (für jede Gruppe)
-                $tables = [];
-                for ($g=0;$g<$nGroups;$g++) {
-                    $tables[$g] = $this->buildHuffmanTable($len[$g], $alphaSize);
-                    if ($tables[$g] === null) {
-                        fclose($in); fclose($out);
-                        IPS_LogMessage("PSAVehicle","bunzip2Pure: Huffman-Tabelle ungültig.");
-                        return false;
-                    }
-                }
-
-                // --- Entropie-Dekodierung (Huffman + RUNA/RUNB + MTF), gruppenweise nach Selectors (50er-Takt)
-                $RUNA = 0;
-                $RUNB = 1;
-                $alphaSize = $nInUse + 2;        // bereits oben bestimmt
-                $eob  = $alphaSize - 1;          // End-of-block-Symbol
-
-                // 1) Canonical-Huffman: Symbol-Decoder (Bits → Symbol)
-                //    (muss VOR $getSym definiert sein!)
-                $decodeSym = function(array $tab) use ($br) {
-                    // $tab: ['minLen','maxLen','limit','base','perm','firstCode']
-                    $code = 0;
-                    for ($l = $tab['minLen']; $l <= $tab['maxLen']; $l++) {
-                        $bit = $br->readBits(1);
-                        if ($bit === null) return null;
-                        $code = ($code << 1) | $bit;
-                        if ($code <= $tab['limit'][$l]) {
-                            $idx = $tab['base'][$l] + ($code - $tab['firstCode'][$l]);
-                            return $tab['perm'][$idx] ?? null;
-                        }
-                    }
-                    return null;
-                };
-
-                // 2) 50er‑Takt je Selector‑Gruppe
-                $groupIndex = 0;       // welcher Selector ist aktiv
-                $remain     = 0;       // verbleibende Dekodierungen in der aktuellen Gruppe (0 → neue Gruppe)
-                $currTable  = null;    // aktuell aktive Huffman-Tabelle
-
-                $nextTable = function() use (&$groupIndex, &$remain, &$currTable, $selectors, $tables, $nSelectors) {
-                    if ($remain === 0) {
-                        if ($groupIndex >= $nSelectors) return false; // Schutz (inkonsistente Daten)
-                        $currTable = $tables[$selectors[$groupIndex]];
-                        $groupIndex++;
-                        $remain = 50;
-                    }
-                    $remain--;
-                    return true;
-                };
-
-                // 3) EIN Symbol holen (unter Beachtung des 50er‑Takts)
-                $getSym = function() use (&$currTable, $nextTable, $decodeSym) {
-                    if (!$nextTable()) return null;
-                    return $decodeSym($currTable);
-                };
-
-                // 4) Hauptschleife: Symbole bis EOB sammeln
-                $symbols = [];
-                $nsym    = 0;
-
-                // MTF‑Arbeitsliste (yy) ist bereits aus $seqToUnseq aufgebaut
-                // --> $yy = $seqToUnseq;
-
-                while (true) {
-                    // Erstes Symbol holen
-                    $sym = $getSym();
-                    if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: Huffman decode fail (initial)"); return false; }
-
-                    if ($sym === $eob) {
-                        break; // Blockende
-                    }
-
-                    if ($sym === $RUNA || $sym === $RUNB) {
-                        // ---- RUN-Dekodierung (bzip2: binärer Zähler; Start r=-1, am Ende r+1)
-                        $r = -1;
-                        $n = 1;
-                        do {
-                            if ($sym === $RUNA) $r += $n;
-                            else                $r += ($n << 1);
-                            $n <<= 1;
-
-                            $sym = $getSym();
-                            if ($sym === null) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: RUN decode fail"); return false; }
-                        } while ($sym === $RUNA || $sym === $RUNB);
-
-                        $runCount = $r + 1;
-                        $c = $yy[0];                          // vorderstes MTF‑Byte
-                        for ($k=0; $k<$runCount; $k++) {
-                            $symbols[$nsym++] = $c;
-                        }
-
-                        if ($sym === $eob) break;             // genau am Blockende
-                        // WICHTIG: $sym ist bereits das nächste „echte“ Symbol → unten verarbeiten
-                    }
-
-                    if ($sym !== $RUNA && $sym !== $RUNB) {
-                        // ---- Normalsymbol: MTF‑Index (sym-1)
-                        $j = $sym - 1;
-                        if (!isset($yy[$j])) { fclose($in); fclose($out); IPS_LogMessage("PSAVehicle","bunzip2Pure: MTF-Index out of range ({$j})"); return false; }
-                        $c = $yy[$j];
-
-                        // Move‑to‑front
-                        array_splice($yy, $j, 1);
-                        array_unshift($yy, $c);
-
-                        $symbols[$nsym++] = $c;
-                        // nächste Iteration holt ein NEUES Symbol via $getSym()
-                    }
-                }
-                // --- (Hier geht's weiter mit inverse BWT / TT‑Aufbau)
-
-                // --- Inverse BWT mit origPtr
-                // Erzeuge Tally über 0..255
-                $count = array_fill(0, 256, 0);
-                for ($i=0;$i<$nsym;$i++) $count[$symbols[$i]]++;
-                $cum = 0; $cumul = [];
-                for ($i=0;$i<256;$i++) { $cum += $count[$i]; $cumul[$i] = $cum - $count[$i]; }
-
-                $tt = array_fill(0, $nsym, 0);
-                $bucket = $cumul; // Arbeitskopie
-                for ($i=0;$i<$nsym;$i++) {
-                    $b = $symbols[$i];
-                    $tt[$bucket[$b]] = $i;
-                    $bucket[$b]++;
-                }
-
-                // Rekonstruiere durch TT-Verkettung, beginnend bei origPtr
-                $t = $tt[$origPtr];
-                for ($i=0;$i<$nsym;$i++) {
-                    $b = $symbols[$t];
-                    // RLE-1 (Sekundäres RLE) rückgängig machen:
-                    // bzip2 schreibt Lauflängen von gleichen Bytes per Zähler in symbol stream ab,
-                    // die eigentliche RLE-Phase ist bereits in RUNA/RUNB abgebildet – hier schreiben wir direkt aus.
-                    fwrite($out, chr($b));
-                    $t = $tt[$t];
-                }
-
-                $writtenTotal += $nsym;
-                // Optional: Block-CRC prüfen (wir überspringen standardmäßig; verifyCrc=true → später implementierbar)
-
-                // Ende Block: weiter zum nächsten Marker
-                continue;
-            }
-
-            if ($eqArr($sig, $EOS_MAGIC)) {
-                // Stream-Ende + Stream-CRC (32 Bit)
-                $streamCrc = ($br->readU8()<<24)|($br->readU8()<<16)|($br->readU8()<<8)|($br->readU8());
-                // Optional: stream-CRC prüfen – wir beenden hier.
-                break;
-            }
-
-            // Weder BLOCK noch EOS => fehlerhaft
-            fclose($in); fclose($out);
-            IPS_LogMessage("PSAVehicle","bunzip2Pure: Unbekannter Marker im Stream.");
-            return false;
-        }
-
-        fclose($in);
-        fclose($out);
-        return ($writtenTotal > 0);
-    }*/
 
     /**
      * Baut eine canonical Huffman-Tabelle aus Code-Längen (<= 20 Bit).
@@ -2298,46 +1729,7 @@ class PSAVehicle extends IPSModule
         }
         $zip->close();
     }    
-    /*public function ActionGenerateAuthorizeUrl(): void
-    {
-        // 1) PKCE: code_verifier + code_challenge (S256)
-        $verifier  = $this->pkceGenerateVerifier();             // ~43-128 chars
-        $challenge = $this->pkceChallengeS256($verifier);
-        $state     = bin2hex(random_bytes(16));
-     
-        $this->SetBuffer("pkce_verifier", $verifier);
-        $this->SetBuffer("oauth_state",   $state);
 
-        // 2) Parameter aus Properties
-        $authUrlBase = rtrim($this->ReadPropertyString("AuthURL"), '/');
-        $clientId    = $this->ReadPropertyString("ClientID");
-        $redirectUri = $this->ReadPropertyString("RedirectURI");    // z.B. mymap://oauth2redirect/de (je Marke)
-        // scope & response_type
-        $scope       = "openid profile";
-        $respType    = "code";
-
-        // 3) Authorize-URL (ENCODED)
-        $q = http_build_query([
-            'client_id'             => $clientId,
-            'redirect_uri'          => $redirectUri,
-            'response_type'         => $respType,
-            'scope'                 => $scope,
-            'state'                 => $state,
-            'code_challenge'        => $challenge,
-            'code_challenge_method' => 'S256'
-        ], '', '&', PHP_QUERY_RFC3986);
-
-        $encoded = $authUrlBase . '/authorize?' . $q;
-
-        // 4) Für Anzeige im Formular: DEKODIERTE Variante (kopierfertig)
-        $decoded = $authUrlBase . '/authorize?' . urldecode($q);
-        IPS_SetProperty($this->InstanceID, "AuthorizeUrlDecoded", $decoded);
-        IPS_ApplyChanges($this->InstanceID);
-
-        IPS_LogMessage("PSAVehicle", "Authorize URL (encoded): ".$encoded);
-        IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): ".$decoded);
-        // Der manuelle Flow (URL im Browser öffnen → F12/Network → code in Location) folgt #779. 
-    }*/
     public function ActionGenerateAuthorizeUrl(): void
     {
         $this->uiLog("");
@@ -2415,530 +1807,7 @@ class PSAVehicle extends IPSModule
     {
         IPS_LogMessage("PSAVehicle", "Authorize URL (decoded): ".$this->ReadPropertyString("AuthorizeUrlDecoded"));
     } 
-    /*public function ActionSubmitOAuthCode(): bool
-    {
-        $this->uiLog("");
 
-        // --- Eingaben/Buffer ---
-        $rawInput  = trim($this->ReadPropertyString("OAuthCode")); // kann "nur code" ODER komplette Redirect-URL sein
-        $pkce      = $this->GetBuffer("pkce_verifier");
-        $expectSt  = $this->GetBuffer("oauth_state");              // state, den wir in der Authorize-URL vergeben haben
-        $tokenUrl  = trim($this->ReadPropertyString("TokenURL"));
-        $clientId  = trim($this->ReadPropertyString("ClientID"));
-        $redirect  = trim($this->ReadPropertyString("RedirectURI"));
-        $realmProp = trim($this->ReadPropertyString("Realm"));
-
-        if ($tokenUrl === "" || $clientId === "" || $redirect === "") {
-            IPS_LogMessage("PSAVehicle", "PKCE: TokenURL, ClientID oder RedirectURI fehlt.");
-            return false;
-        }
-        if ($pkce === "") {
-            IPS_LogMessage("PSAVehicle", "PKCE: Kein code_verifier im Buffer. Bitte Authorize-URL neu erzeugen.");
-            return false;
-        }
-
-        // --- Code extrahieren & optional "state" prüfen ---
-        $parsed = $this->extractCodeFromInput($rawInput);
-        $code   = $parsed['code'];
-        $seenSt = $parsed['state'];
-
-        if ($code === "") {
-            IPS_LogMessage("PSAVehicle", "PKCE: Kein gültiger Code gefunden (Eingabe leer oder ohne code=).");
-            return false;
-        }
-        else
-            {
-                IPS_LogMessage("PSAVehicle", "CODE: $code STATE: $seenSt");
-            }
-
-        // Optionaler State-Check (nur wenn wir aus Redirect-URL kommen)
-        if ($seenSt !== null && $expectSt !== "" && !hash_equals($expectSt, $seenSt)) {
-            IPS_LogMessage("PSAVehicle", "PKCE: STATE mismatch – Abbruch aus Sicherheitsgründen.");
-            $this->uiLog("STATE-Mismatch. Bitte Authorize-Flow erneut starten.");
-            return false;
-        }
-
-        // --- Token-URL inkl. realm aufbauen (ForgeRock/AM erwartet realm als Query-Param) ---
-        $tokenUrl = $this->buildTokenUrlWithRealm($tokenUrl, $realmProp);
-
-        // --- POST-Body (kein client_secret – Public Client mit PKCE) ---
-        $post = [
-            'grant_type'   => 'authorization_code',
-            'code'         => $code,
-            'redirect_uri' => $redirect,
-            'client_id'    => $clientId,
-            'code_verifier'=> $pkce,
-            'client_secret' => $this->ReadPropertyString("ClientSecret")  // ← NEU
-        ];
-
-        // --- Logging (maskiert) ---
-        $masked = http_build_query($post, '', '&', PHP_QUERY_RFC3986);
-        $masked = preg_replace('/(\bcode=)[^&]+/i', '$1***', $masked);
-        $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
-        $masked = preg_replace('/(\bclient_id=)[^&]+/i', '$1***', $masked);
-        $masked = preg_replace('/(\bclient_secret=)[^&]+/i', '$1***', $masked);
-        IPS_LogMessage('PSAVehicle', 'PKCE Token POST (masked): ' . $masked);
-        IPS_LogMessage("PSAVehicle", "PKCE verifier used: " . $pkce);
-
-        $debugUrl = $tokenUrl; // enthält bereits ?realm=...
-        IPS_LogMessage('PSAVehicle', 'DEBUG TokenURL final: ' . $debugUrl);
-        IPS_LogMessage('PSAVehicle', 'DEBUG RedirectURI used: ' . $redirect);
-
-        // --- Token holen: KEIN mTLS am Token-Endpoint! ---
-        // Nutze deine einfache curlPostForm(...) – falls deine Signatur anders ist, anpassen:
-        // Variationen in deinem Modul: curlPostForm($url, $fields, $useMtls=false, $certPem=null, $keyPem=null, $caInfo=null)
-        $resp = $this->curlPostForm($tokenUrl, $post, false, null, null, null);
-
-        // UI
-        $ageTs = $this->GetBuffer('oauth_state_ts');
-        if ($ageTs !== '') {
-            $delta = time() - (int)$ageTs;
-            $this->UpdateFormField('AuthAgeLabel', 'caption', "Zeit seit Authorize-URL erzeugt: {$delta}s");
-            IPS_LogMessage('PSAVehicle', 'Zeit seit Authorize-URL erzeugt(s): ' . $delta);
-        }
-
-        if (!$resp['ok']) {
-            IPS_LogMessage("PSAVehicle", "PKCE: Token-Anforderung fehlgeschlagen: HTTP " . $resp['http'] . " | " . $resp['body']);
-            $this->uiLog("Token-Fehler (" . $resp['http'] . "). Details siehe Log.");
-            return false;
-        }
-
-        $json = json_decode($resp['body'], true);
-        if (!is_array($json) || empty($json['access_token'])) {
-            IPS_LogMessage("PSAVehicle", "PKCE: Unerwartete Antwort: " . $resp['body']);
-            $this->uiLog("Antwort ohne access_token. Details siehe Log.");
-            return false;
-        }
-
-        // --- Token speichern ---
-        IPS_SetProperty($this->InstanceID, "AccessToken", $json['access_token']);
-        if (!empty($json['refresh_token'])) {
-            IPS_SetProperty($this->InstanceID, "RefreshToken", $json['refresh_token']);
-        }
-        IPS_ApplyChanges($this->InstanceID);
-
-        // UI
-        $this->uiLog("AccessToken erhalten (gekürzt): " . substr($json['access_token'], 0, 12) . "…");
-        $ageTs = $this->GetBuffer('oauth_state_ts');
-        if ($ageTs !== '') {
-            $delta = time() - (int)$ageTs;
-            $this->UpdateFormField('AuthAgeLabel', 'caption', "Zeit seit Authorize-URL erzeugt: {$delta}s");
-        }
-
-        return true;
-    }*/
-    /*public function ActionSubmitOAuthCode(): bool
-    {
-        $this->uiLog("");
-
-        // --- Eingaben / Buffer ---
-        $rawInput  = trim($this->ReadPropertyString("OAuthCode"));   // kann "nur code" ODER komplette Redirect-URL sein
-        $pkce      = $this->GetBuffer("pkce_verifier");
-        $expectSt  = $this->GetBuffer("oauth_state");                // STATE aus Authorize-Erzeugung
-        $tokenBase = trim($this->ReadPropertyString("TokenURL"));
-        $clientId  = trim($this->ReadPropertyString("ClientID"));
-        $clientSecret = trim($this->ReadPropertyString("ClientSecret"));
-        $redirect  = trim($this->ReadPropertyString("RedirectURI"));
-        $realmProp = trim($this->ReadPropertyString("Realm"));
-
-        if ($tokenBase === "" || $clientId === "" || $redirect === "") {
-            IPS_LogMessage("PSAVehicle", "PKCE: TokenURL, ClientID oder RedirectURI fehlt.");
-            $this->uiLog("Fehlende Parameter (TokenURL/ClientID/RedirectURI).");
-            return false;
-        }
-        if ($pkce === "") {
-            IPS_LogMessage("PSAVehicle", "PKCE: Kein code_verifier im Buffer. Bitte Authorize-URL neu erzeugen.");
-            $this->uiLog("Kein PKCE-Verifier vorhanden. Bitte Authorize-URL neu erzeugen.");
-            return false;
-        }
-        if ($clientSecret === "") {
-            IPS_LogMessage("PSAVehicle", "Hinweis: ClientSecret leer. Für confidential Clients ist Basic-Auth erforderlich.");
-            // Wir versuchen es dennoch – aber PSA erwartet i.d.R. Basic-Auth mit Secret.
-        }
-
-        // --- Code extrahieren & optional STATE prüfen ---
-        $parsed = $this->extractCodeFromInput($rawInput);
-        $code   = $parsed['code'];
-        $seenSt = $parsed['state'];
-        if ($code === "") {
-            IPS_LogMessage("PSAVehicle", "PKCE: Kein gültiger Code gefunden (Eingabe leer oder ohne code=).");
-            $this->uiLog("Kein gültiger Code. Bitte erneut kopieren.");
-            return false;
-        }
-        if ($seenSt !== null && $expectSt !== "" && !hash_equals($expectSt, $seenSt)) {
-            IPS_LogMessage("PSAVehicle", "PKCE: STATE mismatch – Abbruch aus Sicherheitsgründen.");
-            $this->uiLog("STATE-Mismatch. Bitte Authorize-Flow erneut starten.");
-            return false;
-        }
-
-        // --- Token-URL mit Realm korrekt (mit führendem Slash) aufbauen ---
-        // ForgeRock/AM erwartet in vielen Deployments einen führenden Slash im realm.
-        $realmFinal = '/' . ltrim($realmProp, '/');
-        $tokenUrl   = $this->buildTokenUrlWithRealm($tokenBase, $realmFinal);
-
-        // --- POST-Body (OHNE client_secret; Auth via HTTP Basic) ---
-        $postArray = [
-            'grant_type'    => 'authorization_code',
-            'code'          => $code,
-            'redirect_uri'  => $redirect,
-            'code_verifier' => $pkce,
-            // 'client_id'   → NICHT nötig im Body, da wir Basic-Auth verwenden
-        ];
-        $postFields = http_build_query($postArray, '', '&', PHP_QUERY_RFC3986);
-
-        // --- Logging (maskiert) ---
-        $masked = $postFields;
-        $masked = preg_replace('/(\bcode=)[^&]+/i', '$1***', $masked);
-        $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
-        // Falls du client_id doch mal in den Body aufnehmen würdest:
-        $masked = preg_replace('/(\bclient_id=)[^&]+/i', '$1***', $masked);
-        $masked = preg_replace('/(\bclient_secret=)[^&]+/i', '$1***', $masked);
-
-        IPS_LogMessage("PSAVehicle", "PKCE Token POST (masked): " . $masked);
-        IPS_LogMessage("PSAVehicle", "PKCE verifier used: " . $pkce);
-        IPS_LogMessage("PSAVehicle", "DEBUG TokenURL final: " . $tokenUrl);
-        IPS_LogMessage("PSAVehicle", "DEBUG RedirectURI used: " . $redirect);
-        IPS_LogMessage("PSAVehicle", "CODE: " . $code . " STATE: " . ($seenSt ?? "(kein state)"));
-
-        // --- cURL Request mit HTTP Basic-Auth ---
-        $ch = curl_init($tokenUrl);
-        // Optionales Tracing (wie in deiner curlPostForm): Header+Verbose nur bei Debug
-        $traceFp = null;
-        if (self::PSA_DEBUG_HTTP_VERBOSE) {
-            $traceFp = @fopen(self::PSA_DEBUG_TRACE_FILE, 'w');
-            if ($traceFp) {
-                curl_setopt($ch, CURLOPT_HEADER, false);
-                curl_setopt($ch, CURLOPT_NOBODY, false);
-                curl_setopt($ch, CURLOPT_VERBOSE, true);
-                curl_setopt($ch, CURLOPT_STDERR, $traceFp);
-                IPS_LogMessage('PSAVehicle', 'Trace-Datei ist geöffnet: ' . self::PSA_DEBUG_TRACE_FILE);
-            } else {
-                IPS_LogMessage('PSAVehicle', 'WARN: Trace-Datei konnte nicht geöffnet werden: ' . self::PSA_DEBUG_TRACE_FILE);
-            }
-        }
-
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $postFields,
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/x-www-form-urlencoded',
-                'Accept: application/json'
-            ],
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 30,
-
-            // **HTTP Basic-Auth**: client_id:client_secret
-            CURLOPT_USERPWD        => $clientId . ':' . $clientSecret,
-
-            // TLS / CA
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_CAINFO         => '/etc/ssl/certs/ca-certificates.crt',
-        ]);
-
-        $raw  = curl_exec($ch);
-        IPS_LogMessage("PSAVehicle", "RAW: " . $raw);
-        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err  = curl_error($ch);
-        $eno  = curl_errno($ch);
-        curl_close($ch);
-
-        if ($traceFp && is_string($raw)) {
-            fwrite($traceFp, "\n\n=== cURL RESPONSE (Header+Body) ===\n");
-            fwrite($traceFp, $raw);
-            fclose($traceFp);
-        }
-
-        // Wenn bei Debug CURLOPT_HEADER=true war, enthält $raw Header+Body.
-        // Für die Auswertung versuchen wir, den JSON-Body herauszuschneiden:
-        $body = $this->extractJsonBody($raw);
-
-        IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
-        IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== '' ? $err . " (errno $eno)" : 'OK'));
-        IPS_LogMessage("PSAVehicle", "Body: " . (is_string($body) ? substr($body, 0, 600) : 'kein String'));
-
-        // --- Auswertung ---
-        if ($http < 200 || $http >= 300 || !is_string($body) || $body === '') {
-            $this->uiLog("Token-Fehler ($http). Details siehe Log.");
-            IPS_LogMessage("PSAVehicle", "PKCE: Token-Anforderung fehlgeschlagen: HTTP $http | " . ($err !== '' ? $err : ''));
-            return false;
-        }
-
-        $json = json_decode($body, true);
-        if (!is_array($json) || empty($json['access_token'])) {
-            // Falls der Server jetzt zumindest ein reguläres Fehler-JSON liefert, hier sichtbar:
-            $this->uiLog("Antwort ohne access_token: " . substr($body, 0, 160));
-            IPS_LogMessage("PSAVehicle", "PKCE: Unerwartete Antwort: " . $body);
-            return false;
-        }
-
-        // --- Tokens speichern ---
-        IPS_SetProperty($this->InstanceID, "AccessToken", $json['access_token']);
-        if (!empty($json['refresh_token'])) {
-            IPS_SetProperty($this->InstanceID, "RefreshToken", $json['refresh_token']);
-        }
-        IPS_ApplyChanges($this->InstanceID);
-
-        // UI Update
-        $this->uiLog("AccessToken erhalten (gekürzt): " . substr($json['access_token'], 0, 12) . "…");
-        $ageTs = $this->GetBuffer('oauth_state_ts');
-        if ($ageTs !== '') {
-            $delta = time() - (int)$ageTs;
-            // Du hast den Label-Namen oben leicht variiert; hier neutral:
-            $this->UpdateFormField('AuthAgeLabel', 'caption', "Zeit seit Authorize-URL erzeugt: {$delta}s");
-            IPS_LogMessage("PSAVehicle", "Zeit seit Authorize-URL erzeugt(s): " . $delta);
-        }
-
-        IPS_LogMessage("PSAVehicle", "PKCE: Token gespeichert. Expires_in=" . ($json['expires_in'] ?? 'n/a'));
-        return true;
-    }*/
-    /*public function ActionSubmitOAuthCode(): bool
-    {
-        $this->uiLog("");
-
-        // -------- Eingaben / Buffer --------
-        $rawInput     = trim($this->ReadPropertyString("OAuthCode"));
-        $pkce         = $this->GetBuffer("pkce_verifier");
-        $expectState  = $this->GetBuffer("oauth_state");
-        $tokenBase    = trim($this->ReadPropertyString("TokenURL"));
-        $clientId     = trim($this->ReadPropertyString("ClientID"));
-        $clientSecret = trim($this->ReadPropertyString("ClientSecret"));
-        $redirectUri  = trim($this->ReadPropertyString("RedirectURI"));
-        $realmProp    = trim($this->ReadPropertyString("Realm"));
-
-        if ($tokenBase === "" || $clientId === "" || $redirectUri === "") {
-            $this->uiLog("Fehlende Werte (TokenURL / ClientID / RedirectURI).");
-            IPS_LogMessage("PSAVehicle","Token-Anforderung abgebrochen: fehlende Parameter.");
-            return false;
-        }
-
-        if ($pkce === "") {
-            $this->uiLog("Kein PKCE-Verifier vorhanden. Bitte Authorize-URL neu erzeugen.");
-            return false;
-        }
-
-        // -------- Code + optional STATE prüfen --------
-        $parsed = $this->extractCodeFromInput($rawInput);
-        $code   = $parsed['code'];
-        $seenSt = $parsed['state'];
-
-        if ($code === "") {
-            $this->uiLog("Kein gültiger Code gefunden.");
-            IPS_LogMessage("PSAVehicle","PKCE: kein Code in Eingabe gefunden.");
-            return false;
-        }
-
-        if ($seenSt !== null && $expectState !== "" && !hash_equals($expectState, $seenSt)) {
-            $this->uiLog("STATE-Mismatch. Bitte den Flow neu starten.");
-            IPS_LogMessage("PSAVehicle","PKCE: STATE mismatch.");
-            return false;
-        }
-
-        // -------- Token-URL mit korrektem Realm --------
-        $realmFinal = '/' . ltrim($realmProp, '/');
-        $tokenUrl   = $this->buildTokenUrlWithRealm($tokenBase, $realmFinal);
-
-        // -------- POST-Body (BasicAuth → KEIN client_secret im Body!) --------
-        $post = [
-            "grant_type"    => "authorization_code",
-            "code"          => $code,
-            "redirect_uri"  => $redirectUri,
-            "code_verifier" => $pkce
-        ];
-
-        $postFields = http_build_query($post, "", "&", PHP_QUERY_RFC3986);
-
-        // -------- Maskiertes Logging --------
-        $masked = $postFields;
-        $masked = preg_replace('/(\bcode=)[^&]+/i', '$1***', $masked);
-        $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
-        IPS_LogMessage("PSAVehicle", "PKCE Token POST (masked): " . $masked);
-        IPS_LogMessage("PSAVehicle", "PKCE verifier used: " . $pkce);
-        IPS_LogMessage("PSAVehicle", "DEBUG TokenURL final: " . $tokenUrl);
-        IPS_LogMessage("PSAVehicle", "DEBUG RedirectURI used: " . $redirectUri);
-        IPS_LogMessage("PSAVehicle", "CODE: " . $code . " STATE: " . ($seenSt ?? "(none)"));
-
-        // -------- cURL vorbereiten --------
-        $ch = curl_init($tokenUrl);
-        //curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
-        // WICHTIG: HTTP/2 abschalten → HTTP/1.1 erzwingen
-        curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-
-        // --- WICHTIG: KEIN Header/Verbose bei Token-Calls ---
-        // sonst blockiert HTTPS, RAW bleibt leer
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $postFields,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_HTTPHEADER     => [
-                "Content-Type: application/x-www-form-urlencoded",
-                "Accept: application/json"
-            ],
-            // BasicAuth
-            CURLOPT_USERPWD        => $clientId . ":" . $clientSecret,
-
-            // TLS
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-            CURLOPT_CAINFO         => "/etc/ssl/certs/ca-certificates.crt",
-
-            // KEIN Header, KEIN Verbose
-            CURLOPT_HEADER         => false,
-            CURLOPT_VERBOSE        => false
-        ]);
-        
-        // -------- Request ausführen --------
-        $raw  = curl_exec($ch);
-        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $err  = curl_error($ch);
-        $eno  = curl_errno($ch);
-
-        curl_close($ch);
-
-        IPS_LogMessage("PSAVehicle", "RAW: " . substr($raw ?? "", 0, 300));
-        IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
-        IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== "" ? "$err (errno $eno)" : "OK"));
-
-        // -------- Body extrahieren --------
-        if (!is_string($raw) || trim($raw) === "") {
-            $this->uiLog("Leerer Token-Response erhalten (RAW leer).");
-            IPS_LogMessage("PSAVehicle","Leerer RAW-Response – Debug/Verbose vollständig deaktiviert?");
-            return false;
-        }
-
-        $body = $this->extractJsonBody($raw);
-
-        IPS_LogMessage("PSAVehicle", "Body: " . substr($body, 0, 600));
-
-        // -------- JSON-Parsen --------
-        $json = json_decode($body, true);
-
-        if (!is_array($json) || empty($json["access_token"])) {
-            $this->uiLog("Antwort ohne gültigen access_token.");
-            IPS_LogMessage("PSAVehicle","Token-Antwort ohne access_token: " . substr($body, 0, 300));
-            return false;
-        }
-
-        // -------- Token speichern --------
-        IPS_SetProperty($this->InstanceID, "AccessToken", $json["access_token"]);
-
-        if (!empty($json["refresh_token"])) {
-            IPS_SetProperty($this->InstanceID, "RefreshToken", $json["refresh_token"]);
-        }
-
-        IPS_ApplyChanges($this->InstanceID);
-
-        // UI‑Ausgabe
-        $this->uiLog("AccessToken erhalten (gekürzt): " . substr($json["access_token"], 0, 12) . "…");
-
-        // Alter der Authorize‑URL anzeigen
-        $ts = $this->GetBuffer("oauth_state_ts");
-        if ($ts !== "") {
-            $delta = time() - (int)$ts;
-            $this->UpdateFormField("AuthAgeLabel", "caption",
-                "Zeit seit Authorize‑URL erzeugt: {$delta}s");
-            IPS_LogMessage("PSAVehicle","Zeit seit Authorize-URL erzeugt: $delta s");
-        }
-
-        IPS_LogMessage("PSAVehicle",
-            "PKCE: Token gespeichert. Expires_in=" . ($json["expires_in"] ?? "n/a"));
-
-        return true;
-    }*/       
-    /*public function ActionSubmitOAuthCode(): bool
-    {
-        $this->uiLog("");
-        $code = trim($this->ReadPropertyString("OAuthCode"));
-        if ($code === '') { IPS_LogMessage("PSAVehicle","OAuth: Kein Code eingegeben."); return false; }
-
-        $verifier = $this->GetBuffer("pkce_verifier");
-        if ($verifier === '') { IPS_LogMessage("PSAVehicle","OAuth: Kein PKCE-Verifier vorhanden. Bitte Authorize-URL erneut erzeugen."); return false; }
-
-        $tokenUrl   = $this->ReadPropertyString("TokenURL");
-        $clientId   = $this->ReadPropertyString("ClientID");
-        $clientSecret   = $this->ReadPropertyString("ClientSecret");
-        $redirect   = $this->ReadPropertyString("RedirectURI");
-        $certPath   = $this->ReadPropertyString("CertPath"); // mTLS (Client-Zertifikat)
-        $keyPath    = $this->ReadPropertyString("KeyPath");
-
-        //DEBUG
-        IPS_LogMessage("PSAVehicle", "TOKEN-URL: " . $tokenUrl);
-        IPS_LogMessage("PSAVehicle", "RedirectURI im Token-Request: " . $redirect);
-        IPS_LogMessage("PSAVehicle", "ClientID im Token-Request: " . $clientId);
-        IPS_LogMessage("PSAVehicle", "Code Verifier: " . $verifier);
-
-        $post = [
-            'grant_type'    => 'authorization_code',
-            'code'          => $code,
-            'redirect_uri'  => $redirect,
-            'client_id'     => $clientId,
-            //'client_secret' => $clientSecret,
-            'code_verifier' => $verifier
-        ];
-
-        //$verifier  = $this->ReadAttributeString('PkceVerifier'); // sollte "42-temY..." sein
-        $challenge = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
-
-        IPS_LogMessage('PSAVehicle', 'DEBUG PKCE: computed_challenge=' . $challenge);
-        //IPS_LogMessage('PSAVehicle', 'DEBUG PKCE: authorize_challenge=' . $this->ReadAttributeString('PkceChallenge'));
-
-        // --- Diagnose: POST-Body maskiert ins Log schreiben ---
-        $postFields = http_build_query($post, '', '&', PHP_QUERY_RFC3986);
-
-        // sensible Felder maskieren (nur für Log-Ausgabe)
-        $masked = $postFields;
-        $masked = preg_replace('/(\bcode=)[^&]+/i', '$1***', $masked);
-        $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
-        $masked = preg_replace('/(\bclient_id=)[^&]+/i', '$1***', $masked);
-
-        IPS_LogMessage('PSAVehicle', 'Token POST (masked): ' . $masked);
-
-        // --- Diagnose: Zeit seit Authorize-URL-Erzeugung (optional) ---
-        $tsAuth = $this->GetBuffer('oauth_state_ts');      // siehe Schritt 3 unten
-        if ($tsAuth !== '') {
-            $delta = time() - (int)$tsAuth;
-            IPS_LogMessage('PSAVehicle', 'Sekunden seit Authorize-URL-Erzeugung: ~' . $delta . 's');
-        }
-        
-        if ($tsAuth !== '') {
-            $delta = time() - (int)$tsAuth;
-            $this->UpdateFormField(
-                'AuthAgeLabel',
-                'caption',
-                "Zeit seit Authorize-URL erzeugt: {$delta}s"
-            );
-        }
-
-        //$resp = $this->curlPostForm($tokenUrl, $post, $certPath, $keyPath);
-        //$resp = $this->curlPostForm($tokenUrl, $post);
-        $resp = $this->curlPostFormSmart($tokenUrl, $post);
-        
-        
-        //DEBUG
-        //IPS_LogMessage("PSAVehicle", "Token-ResponseRaw: " . $resp);
-
-        if (!$resp['ok']) {
-            IPS_LogMessage("PSAVehicle","OAuth: Token-Anforderung fehlgeschlagen: HTTP ".$resp['http']." | ".$resp['body']);
-            return false;
-        }
-
-        $json = json_decode($resp['body'], true);
-        if (!is_array($json) || empty($json['access_token'])) {
-            IPS_LogMessage("PSAVehicle","OAuth: Unerwartete Antwort: ".$resp['body']);
-            return false;
-        }
-
-        // Save tokens (passe Properties/Variablen an deine Modulstruktur an)
-        IPS_SetProperty($this->InstanceID, "AccessToken",  $json['access_token']);
-        if (!empty($json['refresh_token'])) {
-            IPS_SetProperty($this->InstanceID, "RefreshToken", $json['refresh_token']);
-        }
-        IPS_ApplyChanges($this->InstanceID);
-
-        IPS_LogMessage("PSAVehicle","OAuth: Token gespeichert. Expires_in=".($json['expires_in'] ?? 'n/a'));
-        return true;
-    }*/
     public function ActionSubmitOAuthCode(): bool
     {
         $this->uiLog("");
@@ -3100,37 +1969,6 @@ class PSAVehicle extends IPSModule
 
         return true;
     }
-    /*private function curlPostForm(string $url, array $fields, string $certPem = null, string $keyPem = null): array
-    {
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => http_build_query($fields, '', '&', PHP_QUERY_RFC3986),
-            CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded', 'Accept: application/json'],
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_CAINFO         => '/etc/ssl/certs/ca-certificates.crt', // Windows: __DIR__.'/cacert.pem'
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
-        ]);
-        // mTLS mit deinem PSA-Client-Zertifikat (aus APK)
-        if ($certPem && $keyPem) {
-            curl_setopt($ch, CURLOPT_SSLCERT, $certPem);
-            curl_setopt($ch, CURLOPT_SSLKEY,  $keyPem);
-        }
-
-        $body = curl_exec($ch);
-        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 0;
-        $err  = curl_error($ch);
-        
-        //DEBUG
-        IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
-        IPS_LogMessage("PSAVehicle", "cURL: " . $err);
-        IPS_LogMessage("PSAVehicle", "Body: " . $body);
-
-        curl_close($ch);
-        return ['ok' => ($body !== false && $http >= 200 && $http < 300), 'body' => $body ?: $err, 'http' => $http];
-    } */
    
     private function curlPostForm(string $url, array $fields): array
     {
@@ -3764,24 +2602,8 @@ class PSAVehicle extends IPSModule
     }  
 
     private function uiLog(string $txt): void
-    { $this->UpdateFormField('OAuthCodeLog', 'caption', $txt); }
+    { $this->UpdateFormField('PSAVehicleLog', 'caption', $txt); }
 
-    /*public function StartAutoPolling() : bool
-    {
-        // 1) Authorize-URL erzeugen (inkl. PKCE)
-        $this->ActionGenerateAuthorizeUrl();
-
-        // Zeitstempel setzen
-        $this->SetBuffer("oauth_state_ts", (string)time());
-
-        // 2) Auto-Poll aktivieren (alle 3 Sekunden)
-        $intervalMs = 3000;
-        $this->SetTimerInterval("DeviceCodePollTimer", $intervalMs);
-
-        IPS_LogMessage("PSAVehicle", "Autopolling gestartet – alle {$intervalMs} ms wird geprüft.");
-
-        return true;
-    }*/
     public function StartAutoPolling(): bool
     {
         $deviceUrl = trim($this->ReadPropertyString("DeviceURL"));
@@ -3864,19 +2686,6 @@ class PSAVehicle extends IPSModule
         // Andernfalls: Benutzer hat nur den Code eingefügt
         return ['code' => $input, 'state' => null];
     }
-    /*private function buildTokenUrlWithRealm(string $baseUrl, string $realm): string
-    {
-        $realm = trim($realm);
-        if ($realm === '') {
-            return $baseUrl;
-        }
-
-        // Realm darf KEINEN leading slash haben!
-        $realm = ltrim($realm, '/');
-
-        $sep = (strpos($baseUrl, '?') === false) ? '?' : '&';
-        return $baseUrl . $sep . 'realm=' . rawurlencode($realm);
-    } */
 
     private function buildTokenUrlWithRealm(string $baseUrl, string $realm): string
     {
@@ -3988,5 +2797,23 @@ class PSAVehicle extends IPSModule
         }
         return $decoded;
     }
-
+    public function ShowHelp()
+    {
+        $f = __DIR__.'/../README.md';
+        $t = '';
+        if (file_exists($f)) {
+            $md = @file_get_contents($f);
+            if ($md !== false && $md !== '') {
+                $t = str_replace(["\r\n","\r"],"\n", $md);
+                $t = preg_replace('/^###\s+/m','▶︎ ',$t);
+                $t = preg_replace('/^##\s+/m','◆ ',$t);
+                $t = preg_replace('/^#\s+/m','■ ',$t);
+                $t = preg_replace('/\*\*(.*?)\*\*/s','$1',$t);
+                $t = preg_replace_callback('/```([\s\S]*?)```/m', function($m){ return "\n".trim($m[1])."\n"; }, $t);
+                $t = preg_replace('/^\s*[\-*]\s+/m','• ',$t);
+            } else { $t = 'README.md ist leer oder konnte nicht gelesen werden.'; }
+        } else { $t = 'README.md nicht gefunden.'; }
+        $this->UpdateFormField('HelpHtml','caption',$t);
+        return '';
+    }
 }
