@@ -2602,7 +2602,7 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "PKCE: Token gespeichert. Expires_in=" . ($json['expires_in'] ?? 'n/a'));
         return true;
     }*/
-    public function ActionSubmitOAuthCode(): bool
+    /*public function ActionSubmitOAuthCode(): bool
     {
         $this->uiLog("");
 
@@ -2755,7 +2755,7 @@ class PSAVehicle extends IPSModule
             "PKCE: Token gespeichert. Expires_in=" . ($json["expires_in"] ?? "n/a"));
 
         return true;
-    }        
+    }*/       
     /*public function ActionSubmitOAuthCode(): bool
     {
         $this->uiLog("");
@@ -2849,6 +2849,167 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle","OAuth: Token gespeichert. Expires_in=".($json['expires_in'] ?? 'n/a'));
         return true;
     }*/
+    public function ActionSubmitOAuthCode(): bool
+    {
+        $this->uiLog("");
+
+        // -------- Eingaben / Buffer --------
+        $rawInput     = trim($this->ReadPropertyString("OAuthCode"));
+        $pkce         = $this->GetBuffer("pkce_verifier");
+        $expectState  = $this->GetBuffer("oauth_state");
+        $tokenBase    = trim($this->ReadPropertyString("TokenURL"));
+        $clientId     = trim($this->ReadPropertyString("ClientID"));
+        $clientSecret = trim($this->ReadPropertyString("ClientSecret"));
+        $redirectUri  = trim($this->ReadPropertyString("RedirectURI"));
+        $realm        = trim($this->ReadPropertyString("Realm"));
+
+        if ($tokenBase === "" || $clientId === "" || $redirectUri === "") {
+            $this->uiLog("Fehlende Werte (TokenURL / ClientID / RedirectURI).");
+            return false;
+        }
+
+        if ($pkce === "") {
+            $this->uiLog("Kein PKCE-Verifier. Bitte Authorize-URL neu erzeugen.");
+            return false;
+        }
+
+        // -------- Code+State extrahieren --------
+        $parsed = $this->extractCodeFromInput($rawInput);
+        $code   = $parsed['code'];
+        $seenSt = $parsed['state'];
+
+        if ($code === "") {
+            $this->uiLog("Kein gültiger Code gefunden.");
+            return false;
+        }
+
+        if ($seenSt !== null && $expectState !== "" && !hash_equals($expectState, $seenSt)) {
+            $this->uiLog("STATE-Mismatch. Bitte erneut starten.");
+            return false;
+        }
+
+        // -------- finale Token URL --------
+        $realmFinal = '/' . ltrim($realm, '/');
+        $tokenUrl = $this->buildTokenUrlWithRealm($tokenBase, $realmFinal);
+
+        // -------- Body --------
+        $post = http_build_query([
+            "grant_type"    => "authorization_code",
+            "code"          => $code,
+            "redirect_uri"  => $redirectUri,
+            "code_verifier" => $pkce
+        ], "", "&", PHP_QUERY_RFC3986);
+
+        // -------- Maskiertes Logging --------
+        $masked = $post;
+        $masked = preg_replace('/(\bcode=)[^&]+/i', '$1***', $masked);
+        $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
+
+        IPS_LogMessage("PSAVehicle", "PKCE Token POST (masked): ".$masked);
+        IPS_LogMessage("PSAVehicle", "PKCE verifier used: ".$pkce);
+        IPS_LogMessage("PSAVehicle", "DEBUG TokenURL final: ".$tokenUrl);
+        IPS_LogMessage("PSAVehicle", "DEBUG RedirectURI used: ".$redirectUri);
+        IPS_LogMessage("PSAVehicle", "CODE: $code STATE: ".($seenSt ?? "(none)"));
+
+        // =========================================================================
+        //  LOW LEVEL TOKEN WORKAROUND — garantiert funktionierend unter Symcon
+        // =========================================================================
+
+        $ch = curl_init($tokenUrl);
+
+        // WICHTIG: HTTP/1.1 erzwingen (Stabilität)
+        curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+
+        // Keine automatische Body-Verarbeitung
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+
+        // Header nur zum Trennen (nicht als RAW-Dump)
+        curl_setopt($ch, CURLOPT_HEADER, true);
+
+        // NIEMALS beim Token-Endpoint Debug/Verbose verwenden
+        curl_setopt($ch, CURLOPT_VERBOSE, false);
+
+        // POST
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+
+        // Basic Auth
+        curl_setopt($ch, CURLOPT_USERPWD, $clientId . ":" . $clientSecret);
+
+        // TLS
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+        curl_setopt($ch, CURLOPT_CAINFO, "/etc/ssl/certs/ca-certificates.crt");
+
+        // Unser manueller Header/Body-Split
+        $header = "";
+        $body   = "";
+
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$header, &$body) {
+            // Header endet beim ersten doppelten CRLF
+            if (strpos($header, "\r\n\r\n") === false) {
+                $header .= $data;
+            } else {
+                $body .= $data;
+            }
+            return strlen($data);
+        });
+
+        curl_exec($ch);
+
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        $eno  = curl_errno($ch);
+
+        curl_close($ch);
+
+        IPS_LogMessage("PSAVehicle", "HTTP: $http");
+        IPS_LogMessage("PSAVehicle", "cURL: ".($err !== "" ? "$err (errno $eno)" : "OK"));
+        IPS_LogMessage("PSAVehicle", "HEADER RAW: ".substr($header,0,300));
+        IPS_LogMessage("PSAVehicle", "BODY RAW: ".substr($body,0,300));
+
+        // Chunk-Dekodierung (falls nötig)
+        $body = $this->removeChunkEncoding($body);
+        IPS_LogMessage("PSAVehicle", "BODY decoded: ".substr($body,0,300));
+
+        // -------- Validieren --------
+        if ($http < 200 || $http >= 300) {
+            $this->uiLog("HTTP $http – Token-Fehler.");
+            return false;
+        }
+
+        if (trim($body) === "") {
+            $this->uiLog("Token-Server meldet 200, aber Body ist leer.");
+            return false;
+        }
+
+        $json = json_decode($body, true);
+
+        if (!is_array($json) || empty($json["access_token"])) {
+            $this->uiLog("Fehlerhafte Antwort: ".substr($body,0,80));
+            return false;
+        }
+
+        // -------- Token speichern --------
+        IPS_SetProperty($this->InstanceID, "AccessToken", $json["access_token"]);
+        if (!empty($json["refresh_token"])) {
+            IPS_SetProperty($this->InstanceID, "RefreshToken", $json["refresh_token"]);
+        }
+        IPS_ApplyChanges($this->InstanceID);
+
+        // -------- UI --------
+        $this->uiLog("AccessToken erhalten (gekürzt): ".substr($json["access_token"],0,12)."…");
+
+        $ts = $this->GetBuffer("oauth_state_ts");
+        if ($ts !== "") {
+            $delta = time() - (int)$ts;
+            $this->UpdateFormField("AuthAgeLabel","caption","Zeit seit Authorize-URL erzeugt: {$delta}s");
+        }
+
+        IPS_LogMessage("PSAVehicle","PKCE: Token gespeichert. Expires_in=".($json["expires_in"] ?? "n/a"));
+
+        return true;
+    }
     /*private function curlPostForm(string $url, array $fields, string $certPem = null, string $keyPem = null): array
     {
         $ch = curl_init($url);
@@ -3714,6 +3875,28 @@ class PSAVehicle extends IPSModule
 
         return $decoded;
     }
+    private function removeChunkEncoding(string $body): string
+    {
+        $decoded = '';
+        $offset  = 0;
+        $len     = strlen($body);
 
+        while ($offset < $len) {
+            if (!preg_match('/\G([0-9a-fA-F]+)\r?\n/As', $body, $m, 0, $offset)) {
+                return $body; // kein Chunk-Encoded
+            }
+
+            $chunkLen = hexdec($m[1]);
+            $offset  += strlen($m[0]);
+
+            if ($chunkLen === 0) {
+                break;
+            }
+
+            $decoded .= substr($body, $offset, $chunkLen);
+            $offset  += $chunkLen + 2; // CRLF
+        }
+        return $decoded;
+    }
 
 }
