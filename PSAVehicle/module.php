@@ -3241,4 +3241,16 @@ class PSAVehicle extends IPSModule
         // Andernfalls: Benutzer hat nur den Code eingefügt
         return ['code' => $input, 'state' => null];
     }
+    private function buildTokenUrlWithRealm(string $baseUrl, string $realm): string
+    {
+        $realm = trim($realm);
+        if ($realm === '') {
+            return $baseUrl;
+        }
+        if ($realm[0] !== '/') {
+            $realm = '/' . $realm;
+        }
+        $sep = (strpos($baseUrl, '?') === false) ? '?' : '&';
+        return $baseUrl . $sep . 'realm=' . rawurlencode($realm);
+    }    
 }
