@@ -2171,6 +2171,7 @@ class PSAVehicle extends IPSModule
     }*/
     public function ActionGenerateAuthorizeUrl(): void
     {
+        $this->uiLog("");
         // 1) PKCE
         $verifier  = $this->pkceGenerateVerifier();
         $challenge = $this->pkceChallengeS256($verifier);
@@ -2248,6 +2249,7 @@ class PSAVehicle extends IPSModule
     
     public function ActionSubmitOAuthCode(): bool
     {
+        $this->uiLog("");
         $code = trim($this->ReadPropertyString("OAuthCode"));
         if ($code === '') { IPS_LogMessage("PSAVehicle","OAuth: Kein Code eingegeben."); return false; }
 
