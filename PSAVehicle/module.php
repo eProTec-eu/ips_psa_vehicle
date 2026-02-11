@@ -2517,7 +2517,7 @@ class PSAVehicle extends IPSModule
         if (self::PSA_DEBUG_HTTP_VERBOSE) {
             $traceFp = @fopen(self::PSA_DEBUG_TRACE_FILE, 'w');
             if ($traceFp) {
-                curl_setopt($ch, CURLOPT_HEADER, true);
+                curl_setopt($ch, CURLOPT_HEADER, false);
                 curl_setopt($ch, CURLOPT_NOBODY, false);
                 curl_setopt($ch, CURLOPT_VERBOSE, true);
                 curl_setopt($ch, CURLOPT_STDERR, $traceFp);
@@ -2547,6 +2547,7 @@ class PSAVehicle extends IPSModule
         ]);
 
         $raw  = curl_exec($ch);
+        IPS_LogMessage("PSAVehicle", "RAW: " . $raw);
         $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err  = curl_error($ch);
         $eno  = curl_errno($ch);
