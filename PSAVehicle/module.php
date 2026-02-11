@@ -2437,7 +2437,7 @@ class PSAVehicle extends IPSModule
 
         return true;
     }*/
-    public function ActionSubmitOAuthCode(): bool
+    /*public function ActionSubmitOAuthCode(): bool
     {
         $this->uiLog("");
 
@@ -2561,12 +2561,6 @@ class PSAVehicle extends IPSModule
 
         // Wenn bei Debug CURLOPT_HEADER=true war, enthält $raw Header+Body.
         // Für die Auswertung versuchen wir, den JSON-Body herauszuschneiden:
-        /*$body = $raw;
-        if (is_string($raw) && strpos($raw, "\r\n\r\n") !== false) {
-            // Nimm alles nach dem letzten Header-Block als Body
-            $parts = preg_split("/\r\n\r\n/", $raw);
-            $body  = end($parts);
-        }*/
         $body = $this->extractJsonBody($raw);
 
         IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
@@ -2607,7 +2601,158 @@ class PSAVehicle extends IPSModule
 
         IPS_LogMessage("PSAVehicle", "PKCE: Token gespeichert. Expires_in=" . ($json['expires_in'] ?? 'n/a'));
         return true;
-    }     
+    }*/
+    public function ActionSubmitOAuthCode(): bool
+    {
+        $this->uiLog("");
+
+        // -------- Eingaben / Buffer --------
+        $rawInput     = trim($this->ReadPropertyString("OAuthCode"));
+        $pkce         = $this->GetBuffer("pkce_verifier");
+        $expectState  = $this->GetBuffer("oauth_state");
+        $tokenBase    = trim($this->ReadPropertyString("TokenURL"));
+        $clientId     = trim($this->ReadPropertyString("ClientID"));
+        $clientSecret = trim($this->ReadPropertyString("ClientSecret"));
+        $redirectUri  = trim($this->ReadPropertyString("RedirectURI"));
+        $realmProp    = trim($this->ReadPropertyString("Realm"));
+
+        if ($tokenBase === "" || $clientId === "" || $redirectUri === "") {
+            $this->uiLog("Fehlende Werte (TokenURL / ClientID / RedirectURI).");
+            IPS_LogMessage("PSAVehicle","Token-Anforderung abgebrochen: fehlende Parameter.");
+            return false;
+        }
+
+        if ($pkce === "") {
+            $this->uiLog("Kein PKCE-Verifier vorhanden. Bitte Authorize-URL neu erzeugen.");
+            return false;
+        }
+
+        // -------- Code + optional STATE prüfen --------
+        $parsed = $this->extractCodeFromInput($rawInput);
+        $code   = $parsed['code'];
+        $seenSt = $parsed['state'];
+
+        if ($code === "") {
+            $this->uiLog("Kein gültiger Code gefunden.");
+            IPS_LogMessage("PSAVehicle","PKCE: kein Code in Eingabe gefunden.");
+            return false;
+        }
+
+        if ($seenSt !== null && $expectState !== "" && !hash_equals($expectState, $seenSt)) {
+            $this->uiLog("STATE-Mismatch. Bitte den Flow neu starten.");
+            IPS_LogMessage("PSAVehicle","PKCE: STATE mismatch.");
+            return false;
+        }
+
+        // -------- Token-URL mit korrektem Realm --------
+        $realmFinal = '/' . ltrim($realmProp, '/');
+        $tokenUrl   = $this->buildTokenUrlWithRealm($tokenBase, $realmFinal);
+
+        // -------- POST-Body (BasicAuth → KEIN client_secret im Body!) --------
+        $post = [
+            "grant_type"    => "authorization_code",
+            "code"          => $code,
+            "redirect_uri"  => $redirectUri,
+            "code_verifier" => $pkce
+        ];
+
+        $postFields = http_build_query($post, "", "&", PHP_QUERY_RFC3986);
+
+        // -------- Maskiertes Logging --------
+        $masked = $postFields;
+        $masked = preg_replace('/(\bcode=)[^&]+/i', '$1***', $masked);
+        $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
+        IPS_LogMessage("PSAVehicle", "PKCE Token POST (masked): " . $masked);
+        IPS_LogMessage("PSAVehicle", "PKCE verifier used: " . $pkce);
+        IPS_LogMessage("PSAVehicle", "DEBUG TokenURL final: " . $tokenUrl);
+        IPS_LogMessage("PSAVehicle", "DEBUG RedirectURI used: " . $redirectUri);
+        IPS_LogMessage("PSAVehicle", "CODE: " . $code . " STATE: " . ($seenSt ?? "(none)"));
+
+        // -------- cURL vorbereiten --------
+        $ch = curl_init($tokenUrl);
+
+        // --- WICHTIG: KEIN Header/Verbose bei Token-Calls ---
+        // sonst blockiert HTTPS, RAW bleibt leer
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $postFields,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTPHEADER     => [
+                "Content-Type: application/x-www-form-urlencoded",
+                "Accept: application/json"
+            ],
+            // BasicAuth
+            CURLOPT_USERPWD        => $clientId . ":" . $clientSecret,
+
+            // TLS
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_CAINFO         => "/etc/ssl/certs/ca-certificates.crt",
+
+            // KEIN Header, KEIN Verbose
+            CURLOPT_HEADER         => false,
+            CURLOPT_VERBOSE        => false
+        ]);
+
+        // -------- Request ausführen --------
+        $raw  = curl_exec($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        $eno  = curl_errno($ch);
+
+        curl_close($ch);
+
+        IPS_LogMessage("PSAVehicle", "RAW: " . substr($raw ?? "", 0, 300));
+        IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
+        IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== "" ? "$err (errno $eno)" : "OK"));
+
+        // -------- Body extrahieren --------
+        if (!is_string($raw) || trim($raw) === "") {
+            $this->uiLog("Leerer Token-Response erhalten (RAW leer).");
+            IPS_LogMessage("PSAVehicle","Leerer RAW-Response – Debug/Verbose vollständig deaktiviert?");
+            return false;
+        }
+
+        $body = $this->extractJsonBody($raw);
+
+        IPS_LogMessage("PSAVehicle", "Body: " . substr($body, 0, 600));
+
+        // -------- JSON-Parsen --------
+        $json = json_decode($body, true);
+
+        if (!is_array($json) || empty($json["access_token"])) {
+            $this->uiLog("Antwort ohne gültigen access_token.");
+            IPS_LogMessage("PSAVehicle","Token-Antwort ohne access_token: " . substr($body, 0, 300));
+            return false;
+        }
+
+        // -------- Token speichern --------
+        IPS_SetProperty($this->InstanceID, "AccessToken", $json["access_token"]);
+
+        if (!empty($json["refresh_token"])) {
+            IPS_SetProperty($this->InstanceID, "RefreshToken", $json["refresh_token"]);
+        }
+
+        IPS_ApplyChanges($this->InstanceID);
+
+        // UI‑Ausgabe
+        $this->uiLog("AccessToken erhalten (gekürzt): " . substr($json["access_token"], 0, 12) . "…");
+
+        // Alter der Authorize‑URL anzeigen
+        $ts = $this->GetBuffer("oauth_state_ts");
+        if ($ts !== "") {
+            $delta = time() - (int)$ts;
+            $this->UpdateFormField("AuthAgeLabel", "caption",
+                "Zeit seit Authorize‑URL erzeugt: {$delta}s");
+            IPS_LogMessage("PSAVehicle","Zeit seit Authorize-URL erzeugt: $delta s");
+        }
+
+        IPS_LogMessage("PSAVehicle",
+            "PKCE: Token gespeichert. Expires_in=" . ($json["expires_in"] ?? "n/a"));
+
+        return true;
+    }        
     /*public function ActionSubmitOAuthCode(): bool
     {
         $this->uiLog("");
