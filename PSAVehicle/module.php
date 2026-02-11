@@ -2582,7 +2582,7 @@ class PSAVehicle extends IPSModule
         $body = curl_exec($ch);
         $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err  = curl_error($ch);
-
+        $eno  = curl_errno($ch);
         curl_close($ch);
 
         $raw = $body;  // enthält jetzt Header + Body, weil CURLOPT_HEADER=true
@@ -2593,7 +2593,6 @@ class PSAVehicle extends IPSModule
 
         $this->uiLog($err);
 
-        IPS_LogMessage("PSAVehicle", "POST host=$host path=$path");
         IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
         IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== '' ? $err . " (errno $eno)" : 'OK'));
         IPS_LogMessage("PSAVehicle", "Body: " . (is_string($body) ? substr($body, 0, 600) : 'kein String'));
