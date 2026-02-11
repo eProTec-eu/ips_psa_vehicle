@@ -372,6 +372,11 @@ class PSAVehicle extends IPSModule
                 ],
                 [
                     "type" => "Button",
+                    "caption" => "Debug Vehicles ShowVins",
+                    "onClick" => 'PSAVehicle_Debug_ListVehiclesV4_ShowVins($id);'
+                ],                
+                [
+                    "type" => "Button",
                     "caption" => "TLS-Handschlag testen (optional)",
                     "onClick" => 'PSAVehicle_TestTlsHandshake($id);'
                 ]
@@ -2825,4 +2830,145 @@ class PSAVehicle extends IPSModule
         $this->UpdateFormField('HelpHtml','caption',$t);
         return '';
     }
+    private function callVehicleListCandidates(string $clientID, string $realm, string $token): array
+    {
+        // Bekannte Kandidaten innerhalb derselben Produkt-API
+        $base = "https://api.groupe-psa.com/connectedcar/v4";
+        $candidates = [
+            // 1) reine Liste (ohne VIN) – mit client_id als Query
+            $base . "/vehicles?client_id=" . rawurlencode($clientID),
+
+            // 2) manche Gateways akzeptieren auch ohne client_id in der Query (weil sie sie aus dem Token/Cert ziehen)
+            $base . "/vehicles",
+
+            // 3) alternativ (vereinzelte Deployments): user-/me-Route
+            // Achtung: nur testen, falls 1) und 2) 404 liefern
+            $base . "/user/vehicles?client_id=" . rawurlencode($clientID),
+        ];
+
+        foreach ($candidates as $url) {
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL            => $url,
+                CURLOPT_RETURNTRANSFER => false,
+                CURLOPT_HEADER         => true,
+                CURLOPT_TIMEOUT        => 30,
+                CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+                CURLOPT_HTTPHEADER     => [
+                    "Authorization: Bearer {$token}",
+                    "x-introspect-realm: {$realm}",
+                    "Accept: application/json",
+                ],
+            ]);
+            try { $this->configureCurlMtls($ch); } catch (\Throwable $e) {
+                IPS_LogMessage("PSAVehicle", "ListVehicles mTLS-Config Fehlschlag: ".$e->getMessage());
+                curl_close($ch);
+                continue;
+            }
+
+            $headerRaw = ""; $bodyRaw = "";
+            curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$headerRaw, &$bodyRaw) {
+                if (strpos($headerRaw, "\r\n\r\n") === false) { $headerRaw .= $data; }
+                else { $bodyRaw .= $data; }
+                return strlen($data);
+            });
+
+            curl_exec($ch);
+            $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $err  = curl_error($ch);
+            curl_close($ch);
+
+            IPS_LogMessage("PSAVehicle", "ListCandidates: {$url}");
+            IPS_LogMessage("PSAVehicle", "HTTP: {$http} / cURL: ".($err !== "" ? $err : "OK"));
+            IPS_LogMessage("PSAVehicle", "Body: ".substr($bodyRaw, 0, 1000));
+
+            if ($http === 200) {
+                // Roh-Body entchunken und zurückgeben
+                return ['ok' => true, 'http' => $http, 'body' => $this->removeChunkEncoding($bodyRaw)];
+            }
+            if ($http === 401 || $http === 403) {
+                // Auth/Scope-Problem – Fallbacks bringen dann nichts
+                return ['ok' => false, 'http' => $http, 'body' => $bodyRaw];
+            }
+            // 404 → weiter probieren
+        }
+        return ['ok' => false, 'http' => 404, 'body' => ''];
+    }   
+    public function Debug_ListVehiclesV4_ShowVins(): bool
+    {
+        if (!$this->validateMtlsPaths()) {
+            IPS_LogMessage("PSAVehicle", "Abbruch: Pfad-/Typ-Validierung fehlgeschlagen.");
+            return false;
+        }
+        $token    = trim($this->ReadPropertyString("AccessToken"));
+        $realm    = trim($this->ReadPropertyString("Realm"));
+        $clientID = trim($this->ReadPropertyString("ClientID"));
+        if ($token === "" || $realm === "" || $clientID === "") {
+            IPS_LogMessage("PSAVehicle","ListVehicles: Token/Realm/ClientID fehlt!");
+            return false;
+        }
+
+        $res = $this->callVehicleListCandidates($clientID, $realm, $token);
+        if (!$res['ok']) {
+            IPS_LogMessage("PSAVehicle","ListVehicles: kein Treffer (HTTP ".($res['http']??'n/a').")");
+            $this->uiLog("Fahrzeugliste: Fehlgeschlagen (HTTP ".($res['http']??'n/a').")");
+            return false;
+        }
+
+        $body = trim($res['body']);
+        if ($body === "") {
+            IPS_LogMessage("PSAVehicle","ListVehicles: leerer Body");
+            $this->uiLog("Fahrzeugliste: leer");
+            return false;
+        }
+
+        // JSON parsen – je nach Deployment kommt ein Array oder ein Objekt mit "vehicles"
+        $json = json_decode($body, true);
+        if (!is_array($json)) {
+            IPS_LogMessage("PSAVehicle","ListVehicles: ungültiges JSON");
+            $this->uiLog("Fahrzeugliste: ungültiges JSON");
+            return false;
+        }
+
+        // Kandidaten sammeln
+        $vins = [];
+        if (isset($json['vehicles']) && is_array($json['vehicles'])) {
+            foreach ($json['vehicles'] as $v) {
+                if (is_array($v) && !empty($v['vin'])) {
+                    $vins[] = strtoupper(trim((string)$v['vin']));
+                }
+            }
+        } elseif (isset($json[0]) || isset($json['vin'])) {
+            // entweder Array mit Objekten oder einzelnes Objekt
+            if (isset($json['vin'])) {
+                $vins[] = strtoupper(trim((string)$json['vin']));
+            } else {
+                foreach ($json as $item) {
+                    if (is_array($item) && !empty($item['vin'])) {
+                        $vins[] = strtoupper(trim((string)$item['vin']));
+                    }
+                }
+            }
+        }
+
+        $vins = array_values(array_unique(array_filter($vins)));
+        if (empty($vins)) {
+            IPS_LogMessage("PSAVehicle","ListVehicles: keine VINs gefunden");
+            $this->uiLog("Fahrzeugliste: keine VINs gefunden");
+            return false;
+        }
+
+        // Im UI ausgeben
+        $msg = "Gefundene VINs:\n- " . implode("\n- ", $vins);
+        $varId = $this->ensurePsaCodeVar();
+        SetValueString($varId, $msg);
+        IPS_LogMessage("PSAVehicle", $msg);
+
+        // OPTIONAL: erste VIN automatisch in Property übernehmen (entkommentieren, wenn gewünscht)
+        // IPS_SetProperty($this->InstanceID, "VIN", $vins[0]);
+        // IPS_ApplyChanges($this->InstanceID);
+        // IPS_LogMessage("PSAVehicle", "VIN automatisch gesetzt auf: ".$vins[0]);
+
+        return true;
+    }     
 }
