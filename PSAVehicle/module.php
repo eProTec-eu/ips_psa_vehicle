@@ -3280,10 +3280,11 @@ class PSAVehicle extends IPSModule
         if ($realm === '') {
             return $baseUrl;
         }
-        if ($realm[0] !== '/') {
-            $realm = '/' . $realm;
-        }
+
+        // Realm darf KEINEN leading slash haben!
+        $realm = ltrim($realm, '/');
+
         $sep = (strpos($baseUrl, '?') === false) ? '?' : '&';
         return $baseUrl . $sep . 'realm=' . rawurlencode($realm);
-    }    
+    } 
 }
