@@ -13,6 +13,7 @@ class PSAVehicle extends IPSModule
         $this->RegisterPropertyString("ClientID", "");
         $this->RegisterPropertyString("ClientSecret", "");
         $this->RegisterPropertyString("AccessToken", "");
+        $this->RegisterPropertyString("RefreshToken", "");
         $this->RegisterPropertyString("Realm", "");
         $this->RegisterPropertyString("VIN", "");
 
