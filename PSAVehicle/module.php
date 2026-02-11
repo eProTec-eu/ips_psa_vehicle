@@ -2358,7 +2358,7 @@ class PSAVehicle extends IPSModule
         }
         else
             {
-                IPS_LogMessage("PSAVehicle", "CODE: $code STATE: $sceenSt");
+                IPS_LogMessage("PSAVehicle", "CODE: $code STATE: $seenSt");
             }
 
         // Optionaler State-Check (nur wenn wir aus Redirect-URL kommen)
