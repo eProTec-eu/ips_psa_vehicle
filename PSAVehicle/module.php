@@ -2670,7 +2670,8 @@ class PSAVehicle extends IPSModule
 
         // -------- cURL vorbereiten --------
         $ch = curl_init($tokenUrl);
-
+        curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+        
         // --- WICHTIG: KEIN Header/Verbose bei Token-Calls ---
         // sonst blockiert HTTPS, RAW bleibt leer
         curl_setopt_array($ch, [
@@ -2694,7 +2695,7 @@ class PSAVehicle extends IPSModule
             CURLOPT_HEADER         => false,
             CURLOPT_VERBOSE        => false
         ]);
-
+        
         // -------- Request ausführen --------
         $raw  = curl_exec($ch);
         $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
