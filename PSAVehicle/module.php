@@ -2437,8 +2437,8 @@ class PSAVehicle extends IPSModule
 
         return true;
     }*/
-   public function ActionSubmitOAuthCode(): bool
-   {
+    public function ActionSubmitOAuthCode(): bool
+    {
         $this->uiLog("");
 
         // --- Eingaben / Buffer ---
@@ -2561,12 +2561,13 @@ class PSAVehicle extends IPSModule
 
         // Wenn bei Debug CURLOPT_HEADER=true war, enthält $raw Header+Body.
         // Für die Auswertung versuchen wir, den JSON-Body herauszuschneiden:
-        $body = $raw;
+        /*$body = $raw;
         if (is_string($raw) && strpos($raw, "\r\n\r\n") !== false) {
             // Nimm alles nach dem letzten Header-Block als Body
             $parts = preg_split("/\r\n\r\n/", $raw);
             $body  = end($parts);
-        }
+        }*/
+        $body = $this->extractJsonBody($raw);
 
         IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
         IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== '' ? $err . " (errno $eno)" : 'OK'));
@@ -3490,5 +3491,81 @@ class PSAVehicle extends IPSModule
         $sep = (strpos($baseUrl, '?') === false) ? '?' : '&';
         return $baseUrl . $sep . 'realm=' . rawurlencode($realm);
     }
+
+    /**
+     * Extrahiert den JSON-Body aus einer cURL-Antwort,
+     * egal ob Debug-Header aktiv sind, egal ob chunked.
+     *
+     * @param string $raw   - kompletter cURL-Output (Header+Body oder nur Body)
+     * @return string       - reiner JSON-Body oder '' wenn nicht gefunden
+     */
+    private function extractJsonBody(string $raw): string
+    {
+        if ($raw === '') {
+            return '';
+        }
+
+        // Falls kein HTTP-Header vorhanden ist → direkt versuchen
+        if (stripos($raw, 'HTTP/') !== 0) {
+            return trim($this->removeChunkEncoding($raw));
+        }
+
+        // Mehrere Headerblöcke möglich (302 → 200 → body)
+        // Wir schneiden ALLE Header (bis zum letzten Block!) ab:
+        $parts = preg_split("/\r?\n\r?\n/", $raw);
+        if (!$parts || count($parts) < 2) {
+            return trim($this->removeChunkEncoding($raw));
+        }
+
+        // Das LETZTE Element nach dem letzten Header ist der echte Body,
+        // vorausgesetzt PSA sendet chunked encoded JSON.
+        $body = end($parts);
+        $body = trim($body);
+
+        // Falls trotzdem noch Chunk-Encoding drin ist:
+        $body = $this->removeChunkEncoding($body);
+
+        return trim($body);
+    }
+
+    /**
+     * Entfernt chunked transfer encoding aus Body-Inhalten.
+     *
+     * @param string $body
+     * @return string
+     */
+    private function removeChunkEncoding(string $body): string
+    {
+        // Typisch: "5F\r\n{json}\r\n0\r\n\r\n"
+        $decoded = '';
+        $offset  = 0;
+        $len     = strlen($body);
+
+        while ($offset < $len) {
+            // Suche nach der nächsten Hex-Zahl
+            if (!preg_match('/\G([0-9a-fA-F]+)\r?\n/As', $body, $m, 0, $offset)) {
+                // Kein Chunk-Encoding → Original Body zurück
+                return $body;
+            }
+
+            $chunkLen = hexdec($m[1]);
+            $offset  += strlen($m[0]);
+
+            if ($chunkLen === 0) {
+                // Endchunk
+                break;
+            }
+
+            // Chunk-Daten extrahieren
+            $chunk = substr($body, $offset, $chunkLen);
+            $decoded .= $chunk;
+
+            // Weiter zum nächsten Chunk
+            $offset += $chunkLen + 2; // +2 für \r\n
+        }
+
+        return $decoded;
+    }
+
 
 }
