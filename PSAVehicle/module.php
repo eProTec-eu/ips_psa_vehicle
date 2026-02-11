@@ -2562,11 +2562,45 @@ class PSAVehicle extends IPSModule
             CURLOPT_CAINFO         => '/etc/ssl/certs/ca-certificates.crt'
         ]);
 
+        //DEBUG
+        $traceFp = null;
+        if (self::PSA_DEBUG_HTTP_VERBOSE) {
+            // Trace-Datei neu anlegen/überschreiben
+            $traceFp = @fopen(self::PSA_DEBUG_TRACE_FILE, 'w');
+            if ($traceFp) {
+                // cURL-Verbose aktivieren und STDERR umleiten
+                curl_setopt($ch, CURLOPT_HEADER, true);
+                curl_setopt($ch, CURLOPT_NOBODY, false);
+                curl_setopt($ch, CURLOPT_VERBOSE, true);
+                curl_setopt($ch, CURLOPT_STDERR, $traceFp);
+                IPS_LogMessage('PSAVehicle', 'Trace-Datei ist geöffnet: ' . self::PSA_DEBUG_TRACE_FILE);
+            } else {
+                IPS_LogMessage('PSAVehicle', 'WARN: Trace-Datei konnte nicht geöffnet werden: ' . self::PSA_DEBUG_TRACE_FILE);
+            }
+        }
+
         $body = curl_exec($ch);
         $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err  = curl_error($ch);
 
         curl_close($ch);
+
+        $raw = $body;  // enthält jetzt Header + Body, weil CURLOPT_HEADER=true
+        if ($traceFp && is_string($raw)) {
+            fwrite($traceFp, "\n\n=== cURL RESPONSE (Header+Body) ===\n");
+            fwrite($traceFp, $raw);
+        }        
+
+        $this->uiLog($err);
+
+        IPS_LogMessage("PSAVehicle", "POST host=$host path=$path");
+        IPS_LogMessage("PSAVehicle", "HTTP: " . $http);
+        IPS_LogMessage("PSAVehicle", "cURL: " . ($err !== '' ? $err . " (errno $eno)" : 'OK'));
+        IPS_LogMessage("PSAVehicle", "Body: " . (is_string($body) ? substr($body, 0, 600) : 'kein String'));
+
+        if ($traceFp) {
+            fclose($traceFp);
+        }        
 
         return [
             'ok'   => ($body !== false && $http >= 200 && $http < 300),
