@@ -2670,8 +2670,10 @@ class PSAVehicle extends IPSModule
 
         // -------- cURL vorbereiten --------
         $ch = curl_init($tokenUrl);
-        curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
-        
+        //curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_2TLS);
+        // WICHTIG: HTTP/2 abschalten → HTTP/1.1 erzwingen
+        curl_setopt($ch, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+
         // --- WICHTIG: KEIN Header/Verbose bei Token-Calls ---
         // sonst blockiert HTTPS, RAW bleibt leer
         curl_setopt_array($ch, [
