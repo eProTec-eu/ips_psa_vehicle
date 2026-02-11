@@ -1,4 +1,14 @@
 <?php
+
+/*
+ * Teile dieses Moduls basieren auf Code aus dem Projekt
+ * "psa_car_controller" von flobz (https://github.com/flobz/psa_car_controller)
+ * lizenziert unter der GNU GPL v3.0.
+ *
+ * Dieses Modul steht gemäß GPL v3.0 ebenfalls unter der gleichen Lizenz.
+ * Modifikationen © 2026 Matthias Fenske.
+ */
+
 class PSAVehicle extends IPSModule
 {
     
