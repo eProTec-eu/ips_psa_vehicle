@@ -2384,6 +2384,10 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage('PSAVehicle', 'PKCE Token POST (masked): ' . $masked);
         IPS_LogMessage("PSAVehicle", "PKCE verifier used: " . $pkce);
 
+        $debugUrl = $tokenUrl; // enthält bereits ?realm=...
+        IPS_LogMessage('PSAVehicle', 'DEBUG TokenURL final: ' . $debugUrl);
+        IPS_LogMessage('PSAVehicle', 'DEBUG RedirectURI used: ' . $redirect);
+
         // --- Token holen: KEIN mTLS am Token-Endpoint! ---
         // Nutze deine einfache curlPostForm(...) – falls deine Signatur anders ist, anpassen:
         // Variationen in deinem Modul: curlPostForm($url, $fields, $useMtls=false, $certPem=null, $keyPem=null, $caInfo=null)
@@ -2394,6 +2398,7 @@ class PSAVehicle extends IPSModule
         if ($ageTs !== '') {
             $delta = time() - (int)$ageTs;
             $this->UpdateFormField('AuthAgeLabel', 'caption', "Zeit seit Authorize-URL erzeugt: {$delta}s");
+            IPS_LogMessage('PSAVehicle', 'Zeit seit Authorize-URL erzeugt(s): ' . $delta);
         }
 
         if (!$resp['ok']) {
