@@ -56,7 +56,6 @@ class PSAVehicle extends IPSModule
         $this->RegisterVariableFloat("Latitude", "Latitude", "", 4);
         $this->RegisterVariableFloat("Longitude", "Longitude", "", 5);
         $this->RegisterVariableString("MapHTML", "Standortkarte", "~HTMLBox", 6);
-        $this->RegisterVariableString("PSACode", "PSA Code / Status", "", 10);
 
         // flobz
         $this->RegisterPropertyString("FlobzApkUrl", "");     // z. B. https://.../app-release.apk
@@ -270,7 +269,7 @@ class PSAVehicle extends IPSModule
                         ],
                         [
                             "type"    => "Button",
-                            "label"   => "Authorize-URL ins Log schreiben",
+                            "caption"   => "Authorize-URL ins Log schreiben",
                             "onClick" => 'PSAVehicle_ActionLogAuthorizeUrl($id);'
                         ],
                         [
@@ -290,7 +289,7 @@ class PSAVehicle extends IPSModule
                         ],
                         [
                             "type"    => "Button",
-                            "label"   => "Code einfügen & tauschen",
+                            "caption"   => "Code einfügen & tauschen",
                             "onClick" => 'PSAVehicle_ActionSubmitOAuthCode($id);'
                         ],
                         [
@@ -334,46 +333,46 @@ class PSAVehicle extends IPSModule
                             ]
                         ]
                     ],
-                    "onClick"  => "PSAVehicle_ShowHelp($id);"
+                    "onClick"  => 'PSAVehicle_ShowHelp($id);'
                 ],           
                 [
-                "type"   => "Button",
-                "label"  => "PSA Code abfragen",
-                "onClick"=> 'PSAVehicle_RequestPsaCode($id);'
+                    "type"   => "Button",
+                    "caption"  => "PSA Code abfragen",
+                    "onClick"=> 'PSAVehicle_RequestPsaCode($id);'
                 ],
                 [
                     "type" => "Button",
-                    "label" => "Fahrzeugdaten aktualisieren (API-Call)",
+                    "caption" => "Fahrzeugdaten aktualisieren (API-Call)",
                     "onClick" => 'PSAVehicle_UpdateVehicleData($id);'
                 ],
                 [
                     "type" => "Button",
-                    "label" => "AuthURL automatisch aus VIN setzen",
+                    "caption" => "AuthURL automatisch aus VIN setzen",
                     "onClick" => 'PSAVehicle_AutoSetAuthFromVin($id);'
                 ],
                 [
                     "type" => "Button",
-                    "label" => "Auto‑Polling starten (kein Code‑Kopieren)",
+                    "caption" => "Auto‑Polling starten (kein Code‑Kopieren)",
                     "onClick" => 'PSAVehicle_StartAutoPolling($id);'
                 ],                
                 [
                     "type" => "Button",
-                    "label" => "Device-Code-Flow starten",
+                    "caption" => "Device-Code-Flow starten",
                     "onClick" => 'PSAVehicle_StartDeviceCode($id);'
                 ],
                 [
                     "type" => "Button",
-                    "label" => "Device-Code-Flow: Polling",
+                    "caption" => "Device-Code-Flow: Polling",
                     "onClick" => 'PSAVehicle_PollDeviceCode($id);'
                 ],
                 [
                     "type" => "Button",
-                    "label" => "Device-Code-Flow: Stop Polling",
+                    "caption" => "Device-Code-Flow: Stop Polling",
                     "onClick" => 'PSAVehicle_StopDeviceCodePolling($id);'
                 ],
                 [
                     "type" => "Button",
-                    "label" => "TLS-Handschlag testen (optional)",
+                    "caption" => "TLS-Handschlag testen (optional)",
                     "onClick" => 'PSAVehicle_TestTlsHandshake($id);'
                 ]
             ]
