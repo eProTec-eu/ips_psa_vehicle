@@ -2382,6 +2382,7 @@ class PSAVehicle extends IPSModule
         $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
         $masked = preg_replace('/(\bclient_id=)[^&]+/i', '$1***', $masked);
         IPS_LogMessage('PSAVehicle', 'PKCE Token POST (masked): ' . $masked);
+        IPS_LogMessage("PSAVehicle", "PKCE verifier used: " . $pkce);
 
         // --- Token holen: KEIN mTLS am Token-Endpoint! ---
         // Nutze deine einfache curlPostForm(...) – falls deine Signatur anders ist, anpassen:
