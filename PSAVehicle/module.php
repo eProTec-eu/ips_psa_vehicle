@@ -1216,72 +1216,138 @@ class PSAVehicle extends IPSModule
 
     public function GetVehicleData()
     {
+        // PSA VEHICLE API DEBUG
+        $debugActive = true;
+
         if (!$this->validateMtlsPaths()) {
             IPS_LogMessage("PSAVehicle", "Abbruch: Pfad-/Typ-Validierung fehlgeschlagen.");
             return false;
         }
-        $token = $this->ReadPropertyString("AccessToken");
-        $realm = $this->ReadPropertyString("Realm");
-        $vin = $this->ReadPropertyString("VIN");
-        $clientID = $this->ReadPropertyString("ClientID");
 
-        // >>> FIX: Prüfen, ob alle Werte vorhanden sind <<<
+        $token    = trim($this->ReadPropertyString("AccessToken"));
+        $realm    = trim($this->ReadPropertyString("Realm"));
+        $vin      = trim($this->ReadPropertyString("VIN"));
+        $clientID = trim($this->ReadPropertyString("ClientID"));
+
         if ($vin === "") {
-            IPS_LogMessage("PSAVehicle", "GetVehicleData: VIN fehlt!");
-            return false;
-        }
-        if ($clientID === "") {
-            IPS_LogMessage("PSAVehicle", "GetVehicleData: ClientID fehlt!");
-            return false;
-        }
-        if ($token === "") {
-            IPS_LogMessage("PSAVehicle", "GetVehicleData: AccessToken fehlt!");
-            return false;
-        }
-        if ($realm === "") {
-            IPS_LogMessage("PSAVehicle", "GetVehicleData: Realm fehlt!");
+            IPS_LogMessage("PSAVehicle","GetVehicleData: VIN fehlt!");
             return false;
         }
 
+        if ($clientID === "") {
+            IPS_LogMessage("PSAVehicle","GetVehicleData: ClientID fehlt!");
+            return false;
+        }
+
+        if ($token === "") {
+            IPS_LogMessage("PSAVehicle","GetVehicleData: AccessToken fehlt!");
+            return false;
+        }
+
+        if ($realm === "") {
+            IPS_LogMessage("PSAVehicle","GetVehicleData: Realm fehlt!");
+            return false;
+        }
+
+        // URL korrekt bauen
         $url = sprintf(
             "https://api.groupe-psa.com/connectedcar/v4/vehicle/%s",
             rawurlencode($vin)
         );
 
-        IPS_LogMessage("PSAVehicle", "GetVehicleData URL: " . $url);
-        $params = http_build_query(["client_id" => $clientID]);
+        $params = "client_id=" . rawurlencode($clientID);
+
+        IPS_LogMessage("PSAVehicle","GetVehicleData URL: $url?$params");
+
+        // --- cURL vorbereiten ---
         $ch = curl_init();
+
         curl_setopt_array($ch, [
-            CURLOPT_URL => $url . "?" . $params,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
+            CURLOPT_URL            => $url . "?" . $params,
+            CURLOPT_RETURNTRANSFER => false,    // wir parsen selbst
+            CURLOPT_HEADER         => true,     // Body selbst extrahieren
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1, // HTTP/1.1 WICHTIG!
+            CURLOPT_HTTPHEADER     => [
                 "Authorization: Bearer $token",
                 "x-introspect-realm: $realm"
-            ],
-            CURLOPT_TIMEOUT => 30
+            ]
         ]);
+
+        // mTLS aktivieren (PSA Fahrzeug-Endpunkte verlangen dies)
         try {
             $this->configureCurlMtls($ch);
         } catch (\Throwable $e) {
-            IPS_LogMessage("PSAVehicle", "TLS-Konfiguration fehlgeschlagen: " . $e->getMessage());
+            IPS_LogMessage("PSAVehicle", "TLS-Konfiguration fehlgeschlagen: ".$e->getMessage());
             curl_close($ch);
             return false;
         }
-        $response = curl_exec($ch);
-        if ($response === false) {
-            $err = curl_error($ch);
-            $no = curl_errno($ch);
-            IPS_LogMessage("PSAVehicle", "cURL-Fehler ($no): $err");
-            curl_close($ch);
-            return false;
-        }
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+        // VEHICLE API DEBUG – Header/Body Splitter
+        $headerRaw = "";
+        $bodyRaw   = "";
+
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data)
+                use (&$headerRaw, &$bodyRaw) {
+
+            // Header endet bei erster Leerzeile
+            if (strpos($headerRaw, "\r\n\r\n") === false) {
+                $headerRaw .= $data;
+            } else {
+                $bodyRaw   .= $data;
+            }
+            return strlen($data);
+        });
+
+        curl_exec($ch);
+
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        $eno  = curl_errno($ch);
+
         curl_close($ch);
-        if ($code !== 200) {
-            IPS_LogMessage("PSAVehicle", "API Fehler $code: $response");
+
+        // DEBUG LOGGING
+        if ($debugActive) {
+            IPS_LogMessage("PSAVehicle", "HTTP: $http");
+            IPS_LogMessage("PSAVehicle", "cURL: ".($err !== "" ? "$err (errno $eno)" : "OK"));
+            IPS_LogMessage("PSAVehicle", "HEADER RAW: ".substr($headerRaw,0,600));
+            IPS_LogMessage("PSAVehicle", "BODY RAW: ".substr($bodyRaw,0,600));
+        }
+
+        // Chunk decode falls nötig
+        $body = $this->removeChunkEncoding($bodyRaw);
+
+        IPS_LogMessage("PSAVehicle", "BODY decoded: ".substr($body,0,600));
+
+        // PSA Fehlercodes interpretieren
+        if ($http === 401) {
+            IPS_LogMessage("PSAVehicle","401 Unauthorized – Token ungültig / abgelaufen.");
             return false;
         }
-        return $response;
+
+        if ($http === 403) {
+            IPS_LogMessage("PSAVehicle","403 Forbidden – Fahrzeugzugriff verweigert (PSA Backend).");
+            IPS_LogMessage("PSAVehicle","Ursachen: Zertifikat falsch, App nicht berechtigt, falsche Marke.");
+            return false;
+        }
+
+        if ($http === 404) {
+            IPS_LogMessage("PSAVehicle","404 Vehicle not found – VIN nicht registriert.");
+            return false;
+        }
+
+        if ($http === 423) {
+            IPS_LogMessage("PSAVehicle","423 Locked – Fahrzeug im Sleep Mode.");
+            return false;
+        }
+
+        if ($http !== 200) {
+            IPS_LogMessage("PSAVehicle","API Fehler $http: ".$body);
+            return false;
+        }
+
+        return $body;
     }
 
     // nur Behelfsweise, wird nur benötigt um die PSA APK von flobz zu zerlegen!!!
