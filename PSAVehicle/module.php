@@ -2377,7 +2377,8 @@ class PSAVehicle extends IPSModule
             'code'         => $code,
             'redirect_uri' => $redirect,
             'client_id'    => $clientId,
-            'code_verifier'=> $pkce
+            'code_verifier'=> $pkce,
+            'client_secret' => $this->ReadPropertyString("ClientSecret")  // ← NEU
         ];
 
         // --- Logging (maskiert) ---
@@ -2385,6 +2386,7 @@ class PSAVehicle extends IPSModule
         $masked = preg_replace('/(\bcode=)[^&]+/i', '$1***', $masked);
         $masked = preg_replace('/(\bcode_verifier=)[^&]+/i', '$1***', $masked);
         $masked = preg_replace('/(\bclient_id=)[^&]+/i', '$1***', $masked);
+        $masked = preg_replace('/(\bclient_secret=)[^&]+/i', '$1***', $masked);
         IPS_LogMessage('PSAVehicle', 'PKCE Token POST (masked): ' . $masked);
         IPS_LogMessage("PSAVehicle", "PKCE verifier used: " . $pkce);
 
