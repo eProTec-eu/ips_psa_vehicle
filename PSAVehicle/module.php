@@ -2356,6 +2356,10 @@ class PSAVehicle extends IPSModule
             IPS_LogMessage("PSAVehicle", "PKCE: Kein gültiger Code gefunden (Eingabe leer oder ohne code=).");
             return false;
         }
+        else
+            {
+                IPS_LogMessage("PSAVehicle", "CODE: $code STATE: $sceenSt");
+            }
 
         // Optionaler State-Check (nur wenn wir aus Redirect-URL kommen)
         if ($seenSt !== null && $expectSt !== "" && !hash_equals($expectSt, $seenSt)) {
