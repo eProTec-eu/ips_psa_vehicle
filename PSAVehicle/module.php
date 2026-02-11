@@ -3843,7 +3843,7 @@ class PSAVehicle extends IPSModule
      * @param string $body
      * @return string
      */
-    private function removeChunkEncoding(string $body): string
+    /*private function removeChunkEncoding(string $body): string
     {
         // Typisch: "5F\r\n{json}\r\n0\r\n\r\n"
         $decoded = '';
@@ -3874,7 +3874,7 @@ class PSAVehicle extends IPSModule
         }
 
         return $decoded;
-    }
+    }*/
     private function removeChunkEncoding(string $body): string
     {
         $decoded = '';
