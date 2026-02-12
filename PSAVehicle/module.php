@@ -402,9 +402,19 @@ class PSAVehicle extends IPSModule
                 ], 
                 [
                     "type" => "Button",
-                    "caption" => "Generate MyM Chain Pem",
+                    "caption" => "Autodetect Vehicle Endpoints",
                     "onClick" => 'PSAVehicle_MyM_AutoDetectVehicleEndpoints($id);'
-                ],                             
+                ],
+                [
+                    "type"    => "Button",
+                    "caption" => "Auto‑Detect Backend",
+                    "onClick" => 'PSAVehicle_AutoDetect_AllBackends($id);'
+                ],
+                [
+                    "type"    => "Button",
+                    "caption" => "Fahrzeugdaten (Auto) lesen",
+                    "onClick" => 'PSAVehicle_Vehicle_Update_Auto($id);'
+                ],                                             
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
@@ -3777,5 +3787,296 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "AutoDetect: OK → ".$listURL);
 
         return $auto;
-    }    
+    } 
+    /**
+     * Generischer GET (JSON) über mTLS + Bearer + (optional) x-introspect-realm.
+     * Nutzt CA aus Modul-Property oder System-Default und setzt CAPATH für OpenSSL 3.x.
+     */
+    private function httpGetJsonMTLS(string $url, string $token, ?string $realm = null, array $extraHeaders = []): array
+    {
+        $ch = curl_init();
+        $hdrs = array_merge([
+            "Accept: application/json",
+            "Authorization: Bearer {$token}",
+        ], $realm ? ["x-introspect-realm: {$realm}"] : []);
+
+        if (!empty($extraHeaders)) {
+            foreach ($extraHeaders as $h) { $hdrs[] = $h; }
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_HEADER         => true,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER     => $hdrs,
+        ]);
+
+        // mTLS (Client-Zert/Key + evtl. CA aus Property)
+        try {
+            $this->configureCurlMtls($ch);
+        } catch (\Throwable $e) {
+            curl_close($ch);
+            return ['http'=>0,'ok'=>false,'body'=>"mTLS config failed: ".$e->getMessage()];
+        }
+
+        // Server-Verify & CA-Bundle/CAPATH final setzen (OpenSSL 3.x robust)
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+
+        $propCA  = trim($this->ReadPropertyString("CAPath"));
+        $caToUse = $propCA !== '' ? $propCA : '/etc/ssl/certs/ca-certificates.crt';
+        curl_setopt($ch, CURLOPT_CAINFO, $caToUse);
+        if (is_dir('/etc/ssl/certs')) { @curl_setopt($ch, CURLOPT_CAPATH, '/etc/ssl/certs'); }
+
+        // Header/Body trennen
+        $hdr=''; $body='';
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch,$data) use (&$hdr,&$body){
+            if (strpos($hdr, "\r\n\r\n") === false) { $hdr .= $data; } else { $body .= $data; }
+            return strlen($data);
+        });
+
+        curl_exec($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        curl_close($ch);
+
+        if ($http === 0 && $err !== '') {
+            return ['http'=>$http,'ok'=>false,'body'=>$err];
+        }
+        $json = $this->removeChunkEncoding($body);
+        return ['http'=>$http,'ok'=>($http>=200 && $http<300),'body'=>$json];
+    } 
+    /** VIN-Liste universell (PSA v4 hat keinen List-Endpoint → nutzt MyM/LCV wenn erkannt) */
+    public function Vehicles_List_Auto(): bool
+    {
+        $autoRaw = $this->GetBuffer('backend_auto');
+        if ($autoRaw==='') { $this->AutoDetect_AllBackends(); $autoRaw = $this->GetBuffer('backend_auto'); }
+        $auto = json_decode($autoRaw, true);
+
+        if (is_array($auto) && ($auto['type']??'')==='mym')  return $this->MyM_ListVehicles_FromBuffer();
+        if (is_array($auto) && ($auto['type']??'')==='lcv')  return $this->LCV_ListVehicles();
+
+        $this->uiLog("Vehicles_List_Auto: Kein List-Endpoint verfügbar (PSA v4).");
+        return false;
+    }
+
+    /** Fahrzeugdaten universell */
+    public function Vehicle_Update_Auto(): bool
+    {
+        $autoRaw = $this->GetBuffer('backend_auto');
+        if ($autoRaw==='') { $this->AutoDetect_AllBackends(); $autoRaw = $this->GetBuffer('backend_auto'); }
+        $auto = json_decode($autoRaw, true);
+        if (!is_array($auto) || empty($auto['type'])) {
+            $this->uiLog("Vehicle_Update_Auto: Kein Backend erkannt.");
+            return false;
+        }
+
+        switch ($auto['type']) {
+            case 'mym':   return $this->MyM_UpdateVehicleData_FromBuffer();
+            case 'lcv':   return $this->LCV_UpdateVehicleData();
+            case 'psa_v4':
+                // Dein bestehender PSA v4-Aufruf:
+                return $this->UpdateVehicleData();  // ruft GetVehicleData() → Variablen füllen
+            default:
+                $this->uiLog("Vehicle_Update_Auto: Unbekanntes Backend.");
+                return false;
+        }
+    }
+    /**
+     * LCV: Fahrzeugdaten (Telemetrie/Status) für die aktuell gesetzte VIN.
+     * Nutzt AutoDetect ('backend_auto' with type='lcv') und schreibt die Daten
+     * in deine Modul-Variablen (BatteryLevel, Range, Odometer, Latitude/Longitude).
+     */
+    public function LCV_UpdateVehicleData(): bool
+    {
+        if (!$this->validateMtlsPaths()) return false;
+
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        $vin   = strtoupper(trim($this->ReadPropertyString("VIN")));
+        if ($token==="" || $realm==="" || $vin==="") {
+            $this->uiLog("LCV: Token/Realm/VIN fehlt.");
+            return false;
+        }
+
+        $autoRaw = $this->GetBuffer('backend_auto');
+        if ($autoRaw==='') {
+            $d = $this->AutoDetect_AllBackends();
+            if (empty($d['ok'])) return false;
+            $autoRaw = $this->GetBuffer('backend_auto');
+        }
+        $auto = json_decode($autoRaw, true);
+        if (!is_array($auto) || ($auto['type']??'')!=='lcv') {
+            $this->uiLog("LCV: AutoDetect ergab kein LCV-Backend.");
+            return false;
+        }
+
+        $statusTpl = $auto['status'] ?? '';
+        $teleTpl   = $auto['tele']   ?? '';
+        if ($statusTpl==='' && $teleTpl==='') {
+            $this->uiLog("LCV: Keine Status/Telemetry Templates vorhanden.");
+            return false;
+        }
+
+        $statusUrl = $statusTpl!=='' ? str_replace('{vin}', rawurlencode($vin), $statusTpl) : '';
+        $teleUrl   = $teleTpl!==''   ? str_replace('{vin}', rawurlencode($vin), $teleTpl)   : '';
+
+        $rT = ['ok'=>false,'http'=>0,'body'=>''];
+        $rS = ['ok'=>false,'http'=>0,'body'=>''];
+
+        if ($teleUrl!=='') {
+            $rT = $this->httpGetJsonMyM($teleUrl, $token, $realm);
+            IPS_LogMessage("PSAVehicle","LCV Telemetry URL: ".$teleUrl);
+            IPS_LogMessage("PSAVehicle","HTTP: ".$rT['http']." / Body: ".substr((string)$rT['body'],0,1500));
+        }
+        if ($statusUrl!=='') {
+            $rS = $this->httpGetJsonMyM($statusUrl, $token, $realm);
+            IPS_LogMessage("PSAVehicle","LCV Status URL: ".$statusUrl);
+            IPS_LogMessage("PSAVehicle","HTTP: ".$rS['http']." / Body: ".substr((string)$rS['body'],0,1500));
+        }
+
+        if (!$rT['ok'] && !$rS['ok']) {
+            $this->uiLog("LCV: Keine Daten (HTTP T=".$rT['http']." / S=".$rS['http'].")");
+            return false;
+        }
+
+        $payload = null;
+        if ($rT['ok']) $payload = json_decode((string)$rT['body'], true);
+        if (!is_array($payload) && $rS['ok']) $payload = json_decode((string)$rS['body'], true);
+        if (!is_array($payload)) {
+            $this->uiLog("LCV: ungültiges JSON");
+            return false;
+        }
+
+        // Kleiner Getter für verschiedene JSON-Formen
+        $get = function(array $a, array $paths) {
+            foreach ($paths as $p) {
+                $cur = $a;
+                foreach (explode('.', $p) as $seg) {
+                    if (is_array($cur) && array_key_exists($seg,$cur)) { $cur = $cur[$seg]; } else { $cur = null; break; }
+                }
+                if ($cur !== null) return $cur;
+            }
+            return null;
+        };
+
+        // Häufige Felder in LCV:
+        //  - Batteriestand: energy.ev.battery.stateOfCharge | batteryLevel | tractionBattery.level
+        //  - Reichweite:    energy.ev.range.km | remainingRange | autonomyKm
+        //  - Odometer:      vehicle.odometer | odometerKm | odometer.value
+        //  - Position:      gps.latitude/longitude | position.lat/lon
+        $battery = $get($payload, [
+            'energy.ev.battery.stateOfCharge','batteryLevel','tractionBattery.level'
+        ]);
+        $rangeKm = $get($payload, [
+            'energy.ev.range.km','remainingRange','autonomyKm'
+        ]);
+        $odo = $get($payload, [
+            'vehicle.odometer','odometerKm','odometer.value'
+        ]);
+        $lat = $get($payload, [
+            'gps.latitude','position.latitude','location.lat','vehicleLocation.lat'
+        ]);
+        $lon = $get($payload, [
+            'gps.longitude','position.longitude','location.lon','vehicleLocation.lon'
+        ]);
+
+        $updated = false;
+        if ($battery !== null && is_numeric($battery)) {
+            SetValue($this->GetIDForIdent("BatteryLevel"), (float)$battery);
+            $updated = true;
+        }
+        if ($rangeKm !== null && is_numeric($rangeKm)) {
+            SetValue($this->GetIDForIdent("Range"), (float)$rangeKm);
+            $updated = true;
+        }
+        if ($odo !== null && is_numeric($odo)) {
+            SetValue($this->GetIDForIdent("Odometer"), (float)$odo);
+            $updated = true;
+        }
+        if ($lat !== null && $lon !== null && is_numeric($lat) && is_numeric($lon)) {
+            $latF = (float)$lat; $lonF = (float)$lon;
+            SetValue($this->GetIDForIdent("Latitude"),  $latF);
+            SetValue($this->GetIDForIdent("Longitude"), $lonF);
+            $this->UpdateMap($latF, $lonF);
+            $updated = true;
+        }
+
+        $this->uiLog($updated ? "LCV: Fahrzeugdaten aktualisiert." : "LCV: Keine mappbaren Felder gefunden.");
+        return $updated;
+    }  
+    /**
+     * LCV: VIN-Liste abrufen (Nutzfahrzeug-Backends).
+     * Nutzt AutoDetect ('backend_auto' with type='lcv').
+     * Schreibt die gefundenen VINs in "PSA Code / Status" und Buffer 'lcv_known_vins'.
+     */
+    public function LCV_ListVehicles(): bool
+    {
+        if (!$this->validateMtlsPaths()) return false;
+
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        if ($token==="" || $realm==="") {
+            $this->uiLog("LCV: Token/Realm fehlt.");
+            return false;
+        }
+
+        $autoRaw = $this->GetBuffer('backend_auto');
+        if ($autoRaw==='') {
+            $d = $this->AutoDetect_AllBackends();
+            if (empty($d['ok'])) return false;
+            $autoRaw = $this->GetBuffer('backend_auto');
+        }
+
+        $auto = json_decode($autoRaw, true);
+        if (!is_array($auto) || ($auto['type']??'')!=='lcv' || empty($auto['list'])) {
+            $this->uiLog("LCV: AutoDetect ergab kein LCV-Backend.");
+            return false;
+        }
+
+        $url = $auto['list'];
+        $res = $this->httpGetJsonMyM($url, $token, $realm);
+        IPS_LogMessage("PSAVehicle","LCV List URL: ".$url);
+        IPS_LogMessage("PSAVehicle","HTTP: ".$res['http']." / Body: ".substr((string)$res['body'],0,1500));
+
+        if (!$res['ok']) {
+            $this->uiLog("LCV VIN-Liste fehlgeschlagen (HTTP ".$res['http'].")");
+            return false;
+        }
+
+        $json = json_decode((string)$res['body'], true);
+        if (!is_array($json)) {
+            $this->uiLog("LCV Liste: ungültiges JSON");
+            return false;
+        }
+
+        // VINs robust extrahieren
+        $vins = [];
+        $push = function($v) use (&$vins) { $v = strtoupper(trim((string)$v)); if ($v!=='') $vins[] = $v; };
+
+        // häufige Formen:
+        // { "vehicles": [ { "vin": "...", ... }, ... ] }
+        if (isset($json['vehicles']) && is_array($json['vehicles'])) {
+            foreach ($json['vehicles'] as $row) {
+                if (is_array($row) && !empty($row['vin'])) $push($row['vin']);
+            }
+        } else {
+            // Liste direkt
+            foreach ($json as $row) {
+                if (is_array($row) && !empty($row['vin'])) $push($row['vin']);
+            }
+        }
+
+        $vins = array_values(array_unique(array_filter($vins)));
+        $msg = empty($vins) ? "LCV: keine VINs gefunden." : "LCV VINs:\n- ".implode("\n- ", $vins);
+
+        $var = $this->ensurePsaCodeVar();
+        SetValueString($var, $msg);
+        $this->SetBuffer('lcv_known_vins', json_encode($vins, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+
+        IPS_LogMessage("PSAVehicle",$msg);
+        return !empty($vins);
+    }                
 }
