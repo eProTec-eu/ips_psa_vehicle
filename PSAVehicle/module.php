@@ -69,7 +69,10 @@ class PSAVehicle extends IPSModule
         $this->RegisterPropertyString("AuthorizeUrlDecoded", "");  // read-only Anzeige im Formular
         $this->RegisterPropertyString("OAuthCode", "");            // Eingabefeld für den Code (36 Zeichen)
         $this->RegisterPropertyString("RedirectURI", "");          // z. B. mymap://oauth2redirect/de (je Marke unterschiedlich) 
-        $this->RegisterPropertyString("Country", "DE");             // Ländercode       
+        $this->RegisterPropertyString("Country", "DE");             // Ländercode   
+        
+        // Mobile Services
+        $this->RegisterPropertyString("BaseMobileUrl", "https://id-dcr.citroen.com/mobile-services/");
     }
 
     public function ApplyChanges()
@@ -310,6 +313,11 @@ class PSAVehicle extends IPSModule
                         ["type" => "Label", "caption" => "• Bei P12/PFX ist meist ein Passwort notwendig."]
                     ]
                 ],
+                [
+                    "type" => "ValidationTextBox",
+                    "name" => "BaseMobileUrl",
+                    "caption" => "Mobile‑Services Basis-URL"
+                ],                
                 [
                     "type" => "Label", 
                     "name"    => "PSAVehicleLog",
