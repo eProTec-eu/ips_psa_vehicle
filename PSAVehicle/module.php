@@ -396,6 +396,11 @@ class PSAVehicle extends IPSModule
                     "onClick" => 'PSAVehicle_TestTlsHandshake($id);'
                 ],
                 [
+                    "type" => "Button",
+                    "caption" => "Generate MyM Chain Pem",
+                    "onClick" => 'GenerateMymChainPem($id);'
+                ],                
+                [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
                     "onClick" => 'PSAVehicle_Debug_TlsCaCheck_MyM($id);'
@@ -3412,9 +3417,15 @@ class PSAVehicle extends IPSModule
             return ['http'=>0,'ok'=>false,'body'=>"mTLS config failed: ".$e->getMessage()];
         }
 
-        // ✅ JETZT final die Server-Verification *erzwingen* & CA-Bundle bestimmen
+        // JETZT final die Server-Verification *erzwingen* & CA-Bundle bestimmen
         curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
         curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+
+        // statt nur CAINFO das komplette Cert-Verzeichnis nutzen
+        curl_setopt($ch, CURLOPT_CAPATH, '/etc/ssl/certs');
+
+        // zusätzlich (falls benötigt):
+        curl_setopt($ch, CURLOPT_CAINFO, '/etc/ssl/certs/ca-certificates.crt');
 
         $propCA  = trim($this->ReadPropertyString("CAPath"));
         $caToUse = $propCA !== '' ? $propCA : '/etc/ssl/certs/ca-certificates.crt';
@@ -3541,5 +3552,73 @@ class PSAVehicle extends IPSModule
         }
         curl_close($ch);
         IPS_LogMessage("PSAVehicle", "TLS-Diag (with mTLS): HTTP={$http2} err=".($err2 ?: 'OK'));
-    }            
+    }   
+    /**
+     * Generiert automatisch eine vollständige Zertifikatskette (mym-chain.pem)
+     * für den Server ac-mym.servicesgp.mpsa.com mittels 'openssl s_client'.
+     *
+     * Speichert die Datei in CertCacheDir/mym-chain.pem
+     * und setzt automatisch CAPath im Modul auf diese Datei.
+     */
+    public function GenerateMymChainPem(): array
+    {
+        $cacheDir = rtrim($this->ReadPropertyString("CertCacheDir"), '/');
+        if ($cacheDir === '' || !$this->isAbsolutePath($cacheDir)) {
+            $msg = "CertCacheDir fehlt oder ist kein absoluter Pfad.";
+            $this->uiLog($msg);
+            return ['ok'=>false,'error'=>$msg];
+        }
+
+        $pemPath = $cacheDir . "/mym-chain.pem";
+        $host = "ac-mym.servicesgp.mpsa.com:443";
+
+        // 1) openssl s_client ausführen und Zertifikate extrahieren
+        $cmd =
+            "openssl s_client -showcerts -servername ac-mym.servicesgp.mpsa.com -connect {$host} </dev/null 2>/dev/null";
+
+        $output = shell_exec($cmd);
+        if ($output === null || trim($output) === '') {
+            $msg = "openssl s_client konnte nicht ausgeführt werden oder lieferte keine Ausgabe.";
+            $this->uiLog($msg);
+            return ['ok'=>false,'error'=>$msg];
+        }
+
+        // 2) Alle Zertifikatsblöcke extrahieren
+        preg_match_all(
+            '/-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----/s',
+            $output,
+            $matches
+        );
+
+        if (empty($matches[0])) {
+            $msg = "Keine Zertifikate im Server-Output gefunden.";
+            $this->uiLog($msg);
+            return ['ok'=>false,'error'=>$msg];
+        }
+
+        // 3) PEM-Datei schreiben (alle gefundenen Zertifikate)
+        $pem = implode("\n", array_map('trim', $matches[0])) . "\n";
+
+        if (@file_put_contents($pemPath, $pem) === false) {
+            $msg = "Konnte mym-chain.pem nicht speichern unter: ".$pemPath;
+            $this->uiLog($msg);
+            return ['ok'=>false,'error'=>$msg];
+        }
+
+        @chmod($pemPath, 0644);
+
+        // 4) CAPath automatisch auf die neue Datei setzen
+        IPS_SetProperty($this->InstanceID, "CAPath", $pemPath);
+        IPS_ApplyChanges($this->InstanceID);
+
+        $msg = "mym-chain.pem generiert und CAPath gesetzt: ".$pemPath;
+        $this->uiLog($msg);
+        IPS_LogMessage("PSAVehicle", $msg);
+
+        return [
+            'ok'      => true,
+            'pemPath' => $pemPath,
+            'certs'   => $matches[0]
+        ];
+    }
 }
