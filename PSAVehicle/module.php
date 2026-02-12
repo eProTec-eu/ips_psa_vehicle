@@ -3899,6 +3899,7 @@ class PSAVehicle extends IPSModule
         $hasMymChain = $mymChain !== '' && is_file($mymChain) && is_readable($mymChain);
 
         // Host-Muster: *.servicesgp.mpsa.com oder id-dcr.citroen.com (bei Bedarf erweitern)
+        $host = parse_url($url, PHP_URL_HOST) ?: '';
         $isMymHost = (bool)preg_match('~(^|\.)servicesgp\.mpsa\.com$~i', $host)
                 || (bool)preg_match('~(^|\.)id-dcr\.citroen\.com$~i', $host);
 
