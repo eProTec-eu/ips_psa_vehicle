@@ -534,15 +534,15 @@ class PSAVehicle extends IPSModule
                     "onClick" => 'PSAVehicle_LCV_GetTelemetry($id);'
                 ],  
                 [
-                "type"    => "Button",
-                "caption" => "LCV – Status (Basic)",
-                "onClick" => "PSAVehicle_LCV_GetStatusBasic($id);"
+                    "type"    => "Button",
+                    "caption" => "LCV – Status (Basic)",
+                    "onClick" => 'PSAVehicle_LCV_GetStatusBasic($id);'
                 ],
                 [
-                "type"    => "Button",
-                "caption" => "LCV – Telemetrie (Basic)",
-                "onClick" => "PSAVehicle_LCV_GetTelemetryBasic($id);"
-                ]
+                    "type"    => "Button",
+                    "caption" => "LCV – Telemetrie (Basic)",
+                    "onClick" => 'PSAVehicle_LCV_GetTelemetryBasic($id);'
+                ],
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
