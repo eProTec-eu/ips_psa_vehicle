@@ -482,7 +482,12 @@ class PSAVehicle extends IPSModule
                     "type"    => "Button",
                     "caption" => "MyM – Discover VehicleRoutes",
                     "onClick" => 'PSAVehicle_MyM_DiscoverVehicleRoutes($id);'
-                ],                                                                                                      
+                ],    
+                [
+                    "type"    => "Button",
+                    "caption" => "LCV – Discover AuthMode",
+                    "onClick" => 'PSAVehicle_LCV_DiscoverAuthMode($id);'
+                ],                                                                                                                   
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
@@ -3860,7 +3865,7 @@ class PSAVehicle extends IPSModule
      * Generischer GET (JSON) über mTLS + Bearer + (optional) x-introspect-realm.
      * Nutzt CA aus Modul-Property oder System-Default und setzt CAPATH für OpenSSL 3.x.
      */
-    private function httpGetJsonMTLS(string $url, string $token, ?string $realm = null, array $extraHeaders = []): array
+    /*private function httpGetJsonMTLS(string $url, string $token, ?string $realm = null, array $extraHeaders = []): array
     {
         $ch = curl_init();
         $hdrs = array_merge([
@@ -3930,7 +3935,78 @@ class PSAVehicle extends IPSModule
         }
         $json = $this->removeChunkEncoding($body);
         return ['http'=>$http,'ok'=>($http>=200 && $http<300),'body'=>$json];
-    } 
+    } */
+    private function httpGetJsonMTLS(string $url, string $token, ?string $realm = null, array $extraHeaders = []): array
+    {
+        $ch = curl_init();
+
+        $hdrs = [
+            "Accept: application/json",
+            "Authorization: Bearer {$token}",
+        ];
+        if ($realm) $hdrs[] = "x-introspect-realm: {$realm}";
+        foreach ($extraHeaders as $h) { $hdrs[] = $h; }
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_HEADER         => true,    // Header in Stream
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER     => $hdrs,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+
+        try { $this->configureCurlMtls($ch); } catch (\Throwable $e) {
+            curl_close($ch);
+            return ['http'=>0,'ok'=>false,'body'=>"mTLS config failed: ".$e->getMessage(), 'headers'=>[]];
+        }
+
+        // Truststore: System-CA + optional MyM-Chain (nicht schadet auch für LCV)
+        $sysCA = '/etc/ssl/certs/ca-certificates.crt';
+        if (is_readable($sysCA)) curl_setopt($ch, CURLOPT_CAINFO, $sysCA);
+        if (is_dir('/etc/ssl/certs')) @curl_setopt($ch, CURLOPT_CAPATH, '/etc/ssl/certs');
+
+        // Header/Body trennen
+        $raw = '';
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$raw) {
+            $raw .= $data; return strlen($data);
+        });
+
+        curl_exec($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        curl_close($ch);
+
+        // Split Header / Body
+        $parts = preg_split("/\r\n\r\n/", $raw, 2);
+        $hdrRaw = $parts[0] ?? '';
+        $bodyRaw = $parts[1] ?? '';
+
+        // Mehrere Header-Sektionen (Weiterleitungen) – letzte nehmen
+        $sections = preg_split("/\r\n\r\n/", $raw);
+        $hdrRaw = trim($sections[count($sections)-2] ?? $hdrRaw);
+        $bodyRaw = $sections[count($sections)-1] ?? $bodyRaw;
+
+        // Header in Array
+        $headers = [];
+        foreach (explode("\r\n", $hdrRaw) as $line) {
+            if (stripos($line, 'HTTP/') === 0) continue;
+            $p = strpos($line, ':');
+            if ($p !== false) {
+                $k = trim(substr($line, 0, $p));
+                $v = trim(substr($line, $p+1));
+                $headers[strtolower($k)][] = $v;
+            }
+        }
+
+        $body = $this->removeChunkEncoding($bodyRaw);
+        IPS_LogMessage("PSAVehicle", "GET {$url} → HTTP {$http}; hdr[www-authenticate]=".(@$headers['www-authenticate'][0] ?? '-'));
+
+        $ok = ($http>=200 && $http<300);
+        return ['http'=>$http, 'ok'=>$ok, 'body'=>$body, 'headers'=>$headers];
+    }   
     /** VIN-Liste universell (PSA v4 hat keinen List-Endpoint → nutzt MyM/LCV wenn erkannt) */
     public function Vehicles_List_Auto(): bool
     {
@@ -4918,4 +4994,52 @@ class PSAVehicle extends IPSModule
         $this->uiLog("MyM Discovery: KEIN Treffer.");
         return false;
     }
+    public function LCV_DiscoverAuthMode(): array
+    {
+        $token    = trim($this->ReadPropertyString("AccessToken"));
+        $realm    = trim($this->ReadPropertyString("Realm"));
+        $vin      = strtoupper(trim($this->ReadPropertyString("VIN")));
+        $clientID = trim($this->ReadPropertyString("ClientID"));
+        if ($token===""||$realm===""||$vin===""||$clientID==="") {
+            $this->uiLog("LCV Discover: Token/Realm/VIN/ClientID fehlt."); return ['ok'=>false];
+        }
+
+        $hosts = ["https://api.groupe-psa.com","https://api-basic.groupe-psa.com"];
+        $basePaths = ["/connectedservices-lcv/v1/vehicles/{$vin}/telemetry",
+                    "/connectedservices-lcv/v1/vehicles/{$vin}/status"];
+
+        $modes = [
+            ['name'=>'A_bearer_only', 'query'=>false, 'hdrs'=>[]],
+            ['name'=>'B_query_client_id', 'query'=>true, 'hdrs'=>[]],
+            ['name'=>'C_header_ibm_client_id', 'query'=>false, 'hdrs'=>["x-ibm-client-id: ".$clientID]],
+            ['name'=>'D_header_x_api_key', 'query'=>false, 'hdrs'=>["x-api-key: ".$clientID]],
+        ];
+
+        $tested = [];
+        foreach ($hosts as $h) {
+            foreach ($basePaths as $p) {
+                foreach ($modes as $m) {
+                    $url = $h . $p;
+                    if ($m['query']) {
+                        $url .= (strpos($url,'?')===false ? '?' : '&')."client_id=".rawurlencode($clientID);
+                    }
+                    $res = $this->httpGetJsonMTLS($url, $token, $realm, $m['hdrs']);
+                    $tested[] = ['url'=>$url,'mode'=>$m['name'],'http'=>$res['http'],'www-auth'=>@$res['headers']['www-authenticate'][0] ?? ''];
+
+                    IPS_LogMessage("PSAVehicle", "LCV Discover {$m['name']}: {$url} → HTTP {$res['http']} / WWW-Auth=".(@$res['headers']['www-authenticate'][0] ?? '-'));
+
+                    if ($res['http']===200) {
+                        $cfg = ['ok'=>true,'host'=>$h,'mode'=>$m['name'],'query'=>$m['query'],'hdrs'=>$m['hdrs']];
+                        $this->SetBuffer('lcv_auth_mode', json_encode($cfg));
+                        $this->uiLog("LCV Discover: 200 mit Modus {$m['name']} auf {$h}");
+                        return $cfg + ['tested'=>$tested];
+                    }
+                }
+            }
+        }
+
+        // kein 200 – trotzdem nützlich: 401/403 geben Hinweise
+        $this->uiLog("LCV Discover: kein 200 – siehe Logs für WWW-Authenticate/Scopes");
+        return ['ok'=>false,'tested'=>$tested];
+    }    
 }
