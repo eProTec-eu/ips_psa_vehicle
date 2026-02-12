@@ -457,7 +457,12 @@ class PSAVehicle extends IPSModule
                     "type"    => "Button",
                     "caption" => "MyM – AutoDetect (optional)",
                     "onClick" => 'PSAVehicle_AutoDetect_MobileServices($id);'
-                ],                                                            
+                ],      
+                [
+                    "type"    => "Button",
+                    "caption" => "MyM – Build MyM Chain",
+                    "onClick" => 'PSAVehicle_BuildMymChain($id);'
+                ],                                                                       
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
@@ -4562,5 +4567,59 @@ class PSAVehicle extends IPSModule
         $r = $this->mymPost("getVehicleStatus", ["vin" => $vin]);
         IPS_LogMessage("PSAVehicle", print_r($r, true));
     }
+    /**
+     * Baut automatisch mym-chain.pem per OpenSSL s_client.
+     * Speichert die Datei in CertCacheDir/mym-chain.pem
+     * und setzt CAPath im Modul darauf.
+     */
+    public function BuildMymChain()
+    {
+        $cacheDir = rtrim($this->ReadPropertyString("CertCacheDir"), '/');
+        if ($cacheDir === '' || !$this->isAbsolutePath($cacheDir)) {
+            $this->uiLog("BuildMymChain: Fehler – CertCacheDir fehlt.");
+            return false;
+        }
 
+        $pemPath = $cacheDir . "/mym-chain.pem";
+        $host = "ac-mym.servicesgp.mpsa.com:443";
+
+        // Schritt 1: Zertifikate mit OpenSSL abrufen
+        $cmd = "openssl s_client -showcerts -connect {$host} </dev/null 2>/dev/null";
+        $output = shell_exec($cmd);
+
+        if ($output === null || trim($output) === "") {
+            $this->uiLog("BuildMymChain: Fehler – OpenSSL gab nichts zurück.");
+            return false;
+        }
+
+        // Schritt 2: Zertifikate extrahieren
+        preg_match_all(
+            '/-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----/s',
+            $output,
+            $matches
+        );
+
+        if (empty($matches[0])) {
+            $this->uiLog("BuildMymChain: Keine Zertifikate gefunden.");
+            return false;
+        }
+
+        // Schritt 3: Datei speichern
+        $pem = implode("\n", array_map('trim', $matches[0])) . "\n";
+
+        if (@file_put_contents($pemPath, $pem) === false) {
+            $this->uiLog("BuildMymChain: Konnte Datei nicht speichern.");
+            return false;
+        }
+
+        @chmod($pemPath, 0644);
+
+        // Schritt 4: Modul-Property CAPath setzen
+        IPS_SetProperty($this->InstanceID, "CAPath", $pemPath);
+        IPS_ApplyChanges($this->InstanceID);
+
+        $this->uiLog("BuildMymChain: Erfolgreich – CAPath ist jetzt ".$pemPath);
+
+        return true;
+    }
 }
