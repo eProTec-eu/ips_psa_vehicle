@@ -374,6 +374,21 @@ class PSAVehicle extends IPSModule
                     "type" => "Button",
                     "caption" => "Debug Vehicles ShowVins",
                     "onClick" => 'PSAVehicle_Debug_ListVehiclesV4_ShowVins($id);'
+                ],  
+                [
+                "type"    => "Button",
+                "caption" => "parameters.json lesen & MyM-Endpunkte ableiten",
+                "onClick" => 'PSAVehicle_ReadParametersFromApkAndResolveEndpoints($id);'
+                ],
+                [
+                "type"    => "Button",
+                "caption" => "VIN‑Liste (MyM) abrufen",
+                "onClick" => 'PSAVehicle_MyM_ListVehicles_FromBuffer($id);'
+                ],
+                [
+                "type"    => "Button",
+                "caption" => "Fahrzeugdaten (MyM) lesen",
+                "onClick" => 'PSAVehicle_MyM_UpdateVehicleData_FromBuffer($id);'
                 ],                
                 [
                     "type" => "Button",
@@ -2970,5 +2985,401 @@ class PSAVehicle extends IPSModule
         // IPS_LogMessage("PSAVehicle", "VIN automatisch gesetzt auf: ".$vins[0]);
 
         return true;
+    } 
+    /**
+     * Liest die parameters.json aus der Marken-APK (basierend auf VIN/Brand),
+     * leitet daraus die MyBrand/mym-services Endpoints ab und speichert alles in Buffern.
+     *
+     * Rückgabe (bei Erfolg):
+     * [
+     *   'ok'             => true,
+     *   'parametersPath' => 'res/raw-de/parameters.json',
+     *   'brand'          => 'citroen',
+     *   'country'        => 'de',
+     *   'base'           => 'https://ac-mym.servicesgp.mpsa.com',
+     *   'list'           => '/api/v1/user/vehicles',
+     *   'status'         => '/api/v1/vehicles/{vin}/status',
+     *   'telemetry'      => '/api/v1/vehicles/{vin}/telemetry',
+     *   'parameters'     => { ... vollständiger JSON-Inhalt ... }
+     * ]
+     *
+     * Bei Fehler:
+     * [ 'ok' => false, 'error' => '...Fehlertext...' ]
+    */
+    public function ReadParametersFromApkAndResolveEndpoints(): array
+    {
+        // 0) VIN/Brand und Cache ermitteln
+        $vin = strtoupper(trim($this->ReadPropertyString("VIN")));
+        if ($vin === '' || strlen($vin) < 3) {
+            $msg = "VIN fehlt/zu kurz – bitte im Modul setzen.";
+            $this->uiLog($msg);
+            return ['ok' => false, 'error' => $msg];
+        }
+        $brand = $this->brandFromVin($vin); // nutzt deine bestehende Funktion
+        if ($brand === null) {
+            $msg = "Marke aus VIN nicht erkennbar (WMI nicht gemappt).";
+            $this->uiLog($msg);
+            return ['ok' => false, 'error' => $msg];
+        }
+
+        $cacheDir = rtrim($this->ReadPropertyString("CertCacheDir"), '/');
+        if ($cacheDir === '' || !$this->isAbsolutePath($cacheDir)) {
+            $msg = "CertCacheDir fehlt/ist kein absoluter Pfad.";
+            $this->uiLog($msg);
+            return ['ok' => false, 'error' => $msg];
+        }
+        $apkPath = $cacheDir . "/" . strtolower($brand) . ".apk";
+        if (!is_file($apkPath) || !is_readable($apkPath)) {
+            $msg = "APK nicht gefunden/lesbar: ".$apkPath." – bitte 'Zertifikate via flobz‑APK holen' ausführen.";
+            $this->uiLog($msg);
+            return ['ok' => false, 'error' => $msg];
+        }
+
+        // 1) parameters.json aus der APK extrahieren (deine bestehende Routine)
+        try {
+            $country = strtolower($this->ReadPropertyString("Country") ?: 'de');
+            $ext = $this->ExtractAppDataFromApkExternal($apkPath, $country);
+            // $ext enthält u. a.: clientId, clientSecret, redirectUri, brand, culture, country, parameters, parametersPath
+            if (!is_array($ext) || empty($ext['parameters']) || empty($ext['parametersPath'])) {
+                $msg = "parameters.json konnte nicht extrahiert werden.";
+                $this->uiLog($msg);
+                return ['ok' => false, 'error' => $msg];
+            }
+        } catch (\Throwable $e) {
+            $msg = "APK‑Analyse/parameters.json fehlgeschlagen: ".$e->getMessage();
+            $this->uiLog($msg);
+            return ['ok' => false, 'error' => $msg];
+        }
+
+        $parameters = $ext['parameters'];
+        $parametersPath = (string)$ext['parametersPath'];
+        $brandFromApk = (string)($ext['brand'] ?? strtolower($brand));
+        $countryFromApk = (string)($ext['country'] ?? $country);
+
+        // 2) MyBrand/mym-services Basis-URL bestimmen (Priorität: middlewareUrl* -> apiBaseUrl -> cvsServicesBaseUrl)
+        $base = '';
+        foreach (['middlewareUrl', 'middlewareUrlExterne', 'apiBaseUrl', 'cvsServicesBaseUrl'] as $k) {
+            if (!empty($parameters[$k]) && is_string($parameters[$k])) {
+                $base = rtrim($parameters[$k], '/');
+                break;
+            }
+        }
+        if ($base === '') {
+            $msg = "Keine Basis-URL in parameters.json gefunden (keys: middlewareUrl*, apiBaseUrl, cvsServicesBaseUrl).";
+            $this->uiLog($msg);
+            return ['ok' => false, 'error' => $msg, 'parametersPath' => $parametersPath];
+        }
+
+        // 3) Pfade für Fahrzeuge/Status/Telemetrie ableiten
+        //    – wenn im JSON vorhanden, nutzt das Modul diese
+        //    – sonst werden sinnvolle Defaults verwendet
+        $list      = '';
+        $status    = '';
+        $telemetry = '';
+
+        if (!empty($parameters['userVehiclesUrl'])) $list = (string)$parameters['userVehiclesUrl'];
+        elseif (!empty($parameters['vehicles']))     $list = (string)$parameters['vehicles'];
+        else                                         $list = '/api/v1/user/vehicles';
+
+        if (!empty($parameters['vehicleStatusUrl'])) $status = (string)$parameters['vehicleStatusUrl'];
+        else                                         $status = '/api/v1/vehicles/{vin}/status';
+
+        if (!empty($parameters['telemetryUrl']))     $telemetry = (string)$parameters['telemetryUrl'];
+        else                                         $telemetry = '/api/v1/vehicles/{vin}/telemetry';
+
+        // 3.1) Pfade normalisieren (führenden Slash sicherstellen)
+        foreach (['list','status','telemetry'] as $key) {
+            if (!isset($$key) || !is_string($$key) || $$key === '') $$key = '/';
+            if ($$key[0] !== '/') $$key = '/'.$$key;
+        }
+
+        // 4) Ergebnisse in Buffer ablegen (zur Wiederverwendung in anderen Calls)
+        //    – kompletter parameters.json Inhalt (zwecks Transparenz)
+        //    – die abgeleiteten Endpoints
+        $this->SetBuffer('parameters_json', json_encode($parameters, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+        $this->SetBuffer('parameters_path', $parametersPath);
+        $endpoints = [
+            'base'      => $base,
+            'list'      => $list,
+            'status'    => $status,
+            'telemetry' => $telemetry
+        ];
+        $this->SetBuffer('mym_endpoints', json_encode($endpoints, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+
+        // 5) UI/Log & Rückgabe
+        IPS_LogMessage("PSAVehicle", "parameters.json: ".$parametersPath);
+        IPS_LogMessage("PSAVehicle", "MyM base=".$base." list=".$list." status=".$status." telemetry=".$telemetry);
+        $this->uiLog("parameters.json gelesen & Endpoints abgeleitet.");
+
+        return [
+            'ok'             => true,
+            'parametersPath' => $parametersPath,
+            'brand'          => $brandFromApk,
+            'country'        => $countryFromApk,
+            'base'           => $base,
+            'list'           => $list,
+            'status'         => $status,
+            'telemetry'      => $telemetry,
+            'parameters'     => $parameters
+        ];
+    }  
+    /**
+     * Liest die MyM-Endpunkte aus dem Buffer (oder ermittelt sie automatisch),
+     * ruft die Fahrzeugliste ab und zeigt die gefundenen VINs im UI an.
+     *
+     * Speichert zusätzlich die VINs in einem Buffer 'mym_known_vins'.
+     *
+     * Rückgabe: true bei mind. 1 gefundener VIN, sonst false.
+     */
+    public function MyM_ListVehicles_FromBuffer(): bool
+    {
+        // 0) Voraussetzungen prüfen
+        if (!$this->validateMtlsPaths()) return false;
+
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        if ($token === "" || $realm === "") {
+            $this->uiLog("MyM: Token/Realm fehlt – bitte PKCE/Authorize durchführen.");
+            return false;
+        }
+
+        // 1) Endpoints aus Buffer laden – falls leer, automatisch aus APK ermitteln.
+        $epRaw = $this->GetBuffer('mym_endpoints');
+        if ($epRaw === '') {
+            $ret = $this->ReadParametersFromApkAndResolveEndpoints();
+            if (!is_array($ret) || empty($ret['ok'])) {
+                $this->uiLog("MyM: Endpoints konnten nicht ermittelt werden.");
+                return false;
+            }
+            $epRaw = $this->GetBuffer('mym_endpoints');
+        }
+        $ep = json_decode($epRaw, true);
+        if (!is_array($ep) || empty($ep['base']) || empty($ep['list'])) {
+            $this->uiLog("MyM: Endpoints im Buffer ungültig.");
+            return false;
+        }
+
+        $base = rtrim($ep['base'], '/');
+        $listPath = is_string($ep['list']) ? $ep['list'] : '/api/v1/user/vehicles';
+        if ($listPath[0] !== '/') $listPath = '/' . $listPath;
+
+        // 2) Request ausführen (Hauptkandidat)
+        $url = $base . $listPath;
+        $res = $this->httpGetJsonMyM($url, $token, $realm);
+        IPS_LogMessage("PSAVehicle", "MyM List URL: {$url}");
+        IPS_LogMessage("PSAVehicle", "HTTP: {$res['http']} / Body: " . substr((string)$res['body'], 0, 1200));
+
+        // 2a) Fallback: ohne /api/v1 falls 404/406 (manche Deployments)
+        if (!$res['ok'] && ($res['http'] === 404 || $res['http'] === 406)) {
+            $alt = '/user/vehicles';
+            if ($listPath !== $alt) {
+                $url2 = $base . $alt;
+                $res2 = $this->httpGetJsonMyM($url2, $token, $realm);
+                IPS_LogMessage("PSAVehicle", "MyM List ALT URL: {$url2}");
+                IPS_LogMessage("PSAVehicle", "HTTP: {$res2['http']} / Body: " . substr((string)$res2['body'], 0, 1200));
+                if ($res2['ok']) $res = $res2;
+            }
+        }
+
+        if (!$res['ok']) {
+            $this->uiLog("MyM Fahrzeugliste fehlgeschlagen (HTTP " . ($res['http'] ?? 'n/a') . ")");
+            return false;
+        }
+
+        // 3) VINs extrahieren (robust für Array- oder Objekt-Formate)
+        $json = json_decode((string)$res['body'], true);
+        if (!is_array($json)) {
+            $this->uiLog("MyM Liste: ungültiges JSON");
+            return false;
+        }
+
+        $vins = [];
+        $pushVin = function($v) use (&$vins) {
+            $vin = strtoupper(trim((string)$v));
+            if ($vin !== '') $vins[] = $vin;
+        };
+
+        if (isset($json['vehicles']) && is_array($json['vehicles'])) {
+            foreach ($json['vehicles'] as $row) {
+                if (is_array($row)) {
+                    if (!empty($row['vin'])) $pushVin($row['vin']);
+                    elseif (!empty($row['vehicle']['vin'])) $pushVin($row['vehicle']['vin']);
+                }
+            }
+        } else {
+            // Liste von Objekten oder einzelnes Objekt
+            if (isset($json['vin'])) {
+                $pushVin($json['vin']);
+            } else {
+                foreach ($json as $row) {
+                    if (is_array($row)) {
+                        if (!empty($row['vin'])) $pushVin($row['vin']);
+                        elseif (!empty($row['vehicle']['vin'])) $pushVin($row['vehicle']['vin']);
+                    }
+                }
+            }
+        }
+
+        $vins = array_values(array_unique(array_filter($vins)));
+        $msg = empty($vins) ? "MyM: keine VINs gefunden." : "MyM VINs:\n- " . implode("\n- ", $vins);
+
+        // 4) UI/Buffer aktualisieren
+        $var = $this->ensurePsaCodeVar();
+        SetValueString($var, $msg);
+        $this->SetBuffer('mym_known_vins', json_encode($vins, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+
+        IPS_LogMessage("PSAVehicle", $msg);
+        return !empty($vins);
     }     
+    /**
+     * Holt Telemetrie/Status für die aktuell gesetzte VIN aus dem MyM-Backend.
+     * Nutzt Endpoints aus dem Buffer (oder ermittelt sie automatisch).
+     * Mapped die wichtigsten Felder auf deine Modul-Variablen.
+     *
+     * Rückgabe: true bei Erfolg, sonst false.
+     */
+    public function MyM_UpdateVehicleData_FromBuffer(): bool
+    {
+        // 0) Voraussetzungen
+        if (!$this->validateMtlsPaths()) return false;
+
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        $vin   = strtoupper(trim($this->ReadPropertyString("VIN")));
+
+        if ($token === "" || $realm === "" || $vin === "") {
+            $this->uiLog("MyM: Token/Realm/VIN fehlt.");
+            return false;
+        }
+
+        // 1) Endpoints laden (oder automatisch ermitteln)
+        $epRaw = $this->GetBuffer('mym_endpoints');
+        if ($epRaw === '') {
+            $ret = $this->ReadParametersFromApkAndResolveEndpoints();
+            if (!is_array($ret) || empty($ret['ok'])) {
+                $this->uiLog("MyM: Endpoints konnten nicht ermittelt werden.");
+                return false;
+            }
+            $epRaw = $this->GetBuffer('mym_endpoints');
+        }
+        $ep = json_decode($epRaw, true);
+        if (!is_array($ep) || empty($ep['base'])) {
+            $this->uiLog("MyM: Endpoints im Buffer ungültig.");
+            return false;
+        }
+
+        $base = rtrim($ep['base'], '/');
+        $statusPath    = is_string($ep['status'])    ? $ep['status']    : '/api/v1/vehicles/{vin}/status';
+        $telemetryPath = is_string($ep['telemetry']) ? $ep['telemetry'] : '/api/v1/vehicles/{vin}/telemetry';
+        if ($statusPath[0] !== '/')    $statusPath = '/' . $statusPath;
+        if ($telemetryPath[0] !== '/') $telemetryPath = '/' . $telemetryPath;
+
+        // {vin} ersetzen
+        $statusUrl    = $base . str_replace('{vin}', rawurlencode($vin), $statusPath);
+        $telemetryUrl = $base . str_replace('{vin}', rawurlencode($vin), $telemetryPath);
+
+        // 2) Telemetrie bevorzugt, Status als Ergänzung/Fallback
+        $rT = $this->httpGetJsonMyM($telemetryUrl, $token, $realm);
+        IPS_LogMessage("PSAVehicle", "MyM Telemetry URL: {$telemetryUrl}");
+        IPS_LogMessage("PSAVehicle", "HTTP: {$rT['http']} / Body: " . substr((string)$rT['body'], 0, 1500));
+
+        $rS = $this->httpGetJsonMyM($statusUrl, $token, $realm);
+        IPS_LogMessage("PSAVehicle", "MyM Status URL: {$statusUrl}");
+        IPS_LogMessage("PSAVehicle", "HTTP: {$rS['http']} / Body: " . substr((string)$rS['body'], 0, 1500));
+
+        if (!$rT['ok'] && !$rS['ok']) {
+            // Fallback-Variante ohne /api/v1 testen (nur bei 404/406 sinnvoll)
+            $fallbackTried = false;
+            if ($rT['http'] === 404 || $rT['http'] === 406 || $rS['http'] === 404 || $rS['http'] === 406) {
+                $statusUrl2    = preg_replace('~/api/v1~', '', $statusUrl, 1);
+                $telemetryUrl2 = preg_replace('~/api/v1~', '', $telemetryUrl, 1);
+                if ($statusUrl2 !== $statusUrl || $telemetryUrl2 !== $telemetryUrl) {
+                    $fallbackTried = true;
+                    $rT = $this->httpGetJsonMyM($telemetryUrl2, $token, $realm);
+                    $rS = $this->httpGetJsonMyM($statusUrl2,    $token, $realm);
+                    IPS_LogMessage("PSAVehicle", "MyM Fallback Telemetry URL: {$telemetryUrl2} (HTTP {$rT['http']})");
+                    IPS_LogMessage("PSAVehicle", "MyM Fallback Status    URL: {$statusUrl2} (HTTP {$rS['http']})");
+                }
+            }
+            if (!$rT['ok'] && !$rS['ok']) {
+                $this->uiLog("MyM: Keine Daten (HTTP T=".$rT['http']."/S=".$rS['http'].($fallbackTried?' Fallback probiert':'' ).")");
+                return false;
+            }
+        }
+
+        // 3) Payload wählen (Telemetrie bevorzugt)
+        $payload = null;
+        if ($rT['ok']) {
+            $payload = json_decode((string)$rT['body'], true);
+        }
+        if (!is_array($payload) && $rS['ok']) {
+            $payload = json_decode((string)$rS['body'], true);
+        }
+        if (!is_array($payload)) {
+            $this->uiLog("MyM: ungültiges JSON in Antwort.");
+            return false;
+        }
+
+        // 4) Mappen der Felder (robust: mehrere mögliche Strukturen)
+        $get = function(array $a, array $paths) {
+            foreach ($paths as $p) {
+                $cur = $a;
+                foreach (explode('.', $p) as $seg) {
+                    if (is_array($cur) && array_key_exists($seg, $cur)) {
+                        $cur = $cur[$seg];
+                    } else {
+                        $cur = null; break;
+                    }
+                }
+                if ($cur !== null) return $cur;
+            }
+            return null;
+        };
+
+        // Beispiele möglicher Keys in verschiedenen Backends
+        $battery = $get($payload, [
+            'batteryLevel', 'ev.battery.level', 'tractionBattery.level', 'electric.battery.level',
+            'energy.batteryStateOfCharge', 'energy.ev.battery.stateOfCharge'
+        ]);
+        $rangeKm = $get($payload, [
+            'range.value', 'remainingRange', 'autonomyKm', 'electric.range.km', 'energy.ev.range.km'
+        ]);
+        $odometer = $get($payload, [
+            'odometer.value', 'mileage.value', 'odometerKm', 'vehicle.odometer'
+        ]);
+        $lat = $get($payload, [
+            'position.latitude', 'gps.latitude', 'location.lat', 'vehicleLocation.lat'
+        ]);
+        $lon = $get($payload, [
+            'position.longitude', 'gps.longitude', 'location.lon', 'vehicleLocation.lon'
+        ]);
+
+        // 5) Werte in Variablen schreiben (nur wenn gefunden)
+        $updated = false;
+        if ($battery !== null && is_numeric($battery)) {
+            SetValue($this->GetIDForIdent("BatteryLevel"), (float)$battery);
+            $updated = true;
+        }
+        if ($rangeKm !== null && is_numeric($rangeKm)) {
+            SetValue($this->GetIDForIdent("Range"), (float)$rangeKm);
+            $updated = true;
+        }
+        if ($odometer !== null && is_numeric($odometer)) {
+            SetValue($this->GetIDForIdent("Odometer"), (float)$odometer);
+            $updated = true;
+        }
+        if ($lat !== null && $lon !== null && is_numeric($lat) && is_numeric($lon)) {
+            $latF = (float)$lat; $lonF = (float)$lon;
+            SetValue($this->GetIDForIdent("Latitude"),  $latF);
+            SetValue($this->GetIDForIdent("Longitude"), $lonF);
+            $this->UpdateMap($latF, $lonF);
+            $updated = true;
+        }
+
+        // optional: letzte Roh-Payload ablegen, z. B. für Debug
+        $this->SetBuffer('mym_last_payload', substr(json_encode($payload, JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES),0,20000));
+
+        $this->uiLog($updated ? "MyM: Fahrzeugdaten aktualisiert." : "MyM: Keine mappbaren Datenfelder gefunden.");
+        return $updated;
+    }                 
 }
