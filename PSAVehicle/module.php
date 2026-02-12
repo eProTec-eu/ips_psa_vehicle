@@ -4785,20 +4785,40 @@ class PSAVehicle extends IPSModule
     }  
     public function MyM_GetVehicles2()
     {
-        $url = "https://ac-mym.servicesgp.mpsa.com/mym/v1/user/vehicles";
-        return $this->httpGetJsonMTLS($url, $this->ReadPropertyString("AccessToken"), $this->ReadPropertyString("Realm"));
+        $res = $this->httpGetJsonMTLS(
+            "https://ac-mym.servicesgp.mpsa.com/mym/v1/user/vehicles",
+            $this->ReadPropertyString("AccessToken"),
+            $this->ReadPropertyString("Realm")
+        );
+
+        IPS_LogMessage("PSAVehicle", "MyM GetVehicles JSON: " . substr($res['body'], 0, 3000));
+        return $res;
     }   
     public function MyM_GetStatus2()
     {
         $vin = trim($this->ReadPropertyString("VIN"));
         $url = "https://ac-mym.servicesgp.mpsa.com/mym/v1/vehicle/{$vin}/status";
-        return $this->httpGetJsonMTLS($url, $this->ReadPropertyString("AccessToken"), $this->ReadPropertyString("Realm"));
+        $res = $this->httpGetJsonMTLS(
+            $url,
+            $this->ReadPropertyString("AccessToken"),
+            $this->ReadPropertyString("Realm")
+        );
+
+        IPS_LogMessage("PSAVehicle", "MyM GetStatus JSON: " . substr($res['body'], 0, 3000));
+        return $res;
     }     
     public function MyM_GetTelemetry2()
     {
         $vin = trim($this->ReadPropertyString("VIN"));
         $url = "https://ac-mym.servicesgp.mpsa.com/mym/v1/vehicle/{$vin}/telemetry";
-        return $this->httpGetJsonMTLS($url, $this->ReadPropertyString("AccessToken"), $this->ReadPropertyString("Realm"));
+        $res = $this->httpGetJsonMTLS(
+            $url,
+            $this->ReadPropertyString("AccessToken"),
+            $this->ReadPropertyString("Realm")
+        );
+
+        IPS_LogMessage("PSAVehicle", "MyM GetTelemetry JSON: " . substr($res['body'], 0, 3000));
+        return $res;        
     }
 
 }
