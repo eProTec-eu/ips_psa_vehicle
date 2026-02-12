@@ -441,22 +441,22 @@ class PSAVehicle extends IPSModule
                 [
                     "type"    => "Button",
                     "caption" => "MyM – Fahrzeugliste abrufen",
-                    "onClick" => "PSAVehicle_MyM_GetVehicleList($id);"
+                    "onClick" => 'PSAVehicle_MyM_GetVehicleList($id);'
                 ],
                 [
                     "type"    => "Button",
                     "caption" => "MyM – Status abrufen",
-                    "onClick" => "PSAVehicle_MyM_GetStatus($id);"
+                    "onClick" => 'PSAVehicle_MyM_GetStatus($id);'
                 ],
                 [
                     "type"    => "Button",
                     "caption" => "MyM – Telemetrie abrufen",
-                    "onClick" => "PSAVehicle_MyM_GetTelemetry($id);"
+                    "onClick" => 'PSAVehicle_MyM_GetTelemetry($id);'
                 ],
                 [
                     "type"    => "Button",
                     "caption" => "MyM – AutoDetect (optional)",
-                    "onClick" => "PSAVehicle_AutoDetect_MobileServices($id);"
+                    "onClick" => 'PSAVehicle_AutoDetect_MobileServices($id);'
                 ],                                                            
                 [
                     "type"    => "Button",
