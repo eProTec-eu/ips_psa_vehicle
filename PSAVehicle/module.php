@@ -399,7 +399,12 @@ class PSAVehicle extends IPSModule
                     "type" => "Button",
                     "caption" => "Generate MyM Chain Pem",
                     "onClick" => 'PSAVehicle_GenerateMymChainPem($id);'
-                ],                
+                ], 
+                [
+                    "type" => "Button",
+                    "caption" => "Generate MyM Chain Pem",
+                    "onClick" => 'PSAVehicle_MyM_AutoDetectVehicleEndpoints($id);'
+                ],                             
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
@@ -3621,4 +3626,156 @@ class PSAVehicle extends IPSModule
             'certs'   => $matches[0]
         ];
     }
+    /**
+     * AUTO-DETECT: findet automatisch die gültigen Vehicle-Endpoints für das MyM-Backend
+     * (z.B. für Citroën ë‑Jumpy, Peugeot e‑Expert, Opel Vivaro‑e usw.).
+     *
+     * Die Funktion:
+     * 1) Testet systematisch alle bekannten MyM-Routen.
+     * 2) Prüft HTTP-Codes (TLS+Auth+Routing).
+     * 3) Speichert den ersten gültigen Endpoint im Buffer "mym_autodetect".
+     * 4) Leitet Status/Telemetry-URLs automatisch aus der Basis-URL ab.
+     *
+     * Rückgabe-Array:
+     * [
+     *   'ok'      => true/false,
+     *   'base'    => Basis-URL,
+     *   'list'    => Fahrzeugliste-URL,
+     *   'status'  => Status-URL (mit {vin}),
+     *   'tele'    => Telemetrie-URL (mit {vin}),
+     *   'tested'  => Liste aller getesteten URLs + HTTP-Codes,
+     * ]
+     */
+    public function MyM_AutoDetectVehicleEndpoints(): array
+    {
+        if (!$this->validateMtlsPaths()) {
+            $msg = "AutoDetect: mTLS-Paths ungültig.";
+            $this->uiLog($msg);
+            return ['ok'=>false, 'error'=>$msg];
+        }
+
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        if ($token === "" || $realm === "") {
+            $msg = "AutoDetect: Token oder Realm fehlt.";
+            $this->uiLog($msg);
+            return ['ok'=>false, 'error'=>$msg];
+        }
+
+        // Basis-URL aus parameters.json (wurde durch deine ReadParameters-Funktion gespeichert)
+        $baseRaw = $this->GetBuffer('mym_endpoints');
+        if ($baseRaw !== '') {
+            $tmp = json_decode($baseRaw, true);
+            if (is_array($tmp) && !empty($tmp['base'])) {
+                $base = rtrim($tmp['base'], '/');
+            }
+        }
+        if (empty($base)) {
+            $msg = "AutoDetect: Keine Basis-URL gefunden. Bitte vorher ReadParametersFromApkAndResolveEndpoints ausführen.";
+            $this->uiLog($msg);
+            return ['ok'=>false, 'error'=>$msg];
+        }
+
+        // Alle real bekannten MyM-Routen zum Testen
+        $candidates = [
+            "/api/vehicle/v1/vehicles",
+            "/api/vehicle-list/v1/vehicles",
+            "/connected/v1/user/vehicles",
+            "/api/v1/vehicle/vehicles",
+            "/api/v1/user/vehicles",
+            "/vehicle/v1/vehicles",
+            "/user/vehicles",
+        ];
+
+        $tested = [];
+        $found  = null;
+        foreach ($candidates as $path) {
+
+            // normalize
+            if ($path[0] !== '/') $path = '/' . $path;
+
+            $url = $base . $path;
+
+            $res = $this->httpGetJsonMyM($url, $token, $realm);
+            $tested[] = [
+                'url'  => $url,
+                'http' => $res['http'],
+                'ok'   => $res['ok']
+            ];
+
+            IPS_LogMessage("PSAVehicle", "AutoDetect: Test ".$url." → HTTP ".$res['http']);
+
+            // Erfolgreiche Erkennung: HTTP 200 ODER HTTP 401 (Liste könnte Auth brauchen)
+            if ($res['http'] === 200 || $res['http'] === 401) {
+                $found = $path;
+                break;
+            }
+
+            // Auch akzeptieren wir 403 (permission) als "Route existiert zumindest"!
+            if ($res['http'] === 403) {
+                $found = $path;
+                break;
+            }
+        }
+
+        if ($found === null) {
+            $msg = "AutoDetect: Keine gültige Vehicle-Endpoint-Route gefunden.";
+            $this->uiLog($msg);
+            return [
+                'ok'=>false,
+                'error'=>$msg,
+                'tested'=>$tested
+            ];
+        }
+
+        // Status/Telemetry aus gefundener Basis ableiten
+        // Die Plattform verwendet fast immer dieses Schema:
+        //   /api/vehicle/v1/{vin}/status
+        //   /api/vehicle/v1/{vin}/telemetry
+        // sogar dann, wenn die Fahrzeugliste über andere Pfade läuft.
+
+        // Wir zerlegen nur den ersten Teil
+        $parts = explode('/', trim($found, '/'));
+
+        // Beispiel:
+        //   parts = ["api","vehicle","v1","vehicles"]
+        // Wir schneiden "vehicles" ab und erhalten:
+        //   basePart = "api/vehicle/v1"
+
+        if (count($parts) >= 3) {
+            // Suche "v1" im Pfad
+            $pIdx = array_search('v1', $parts);
+            if ($pIdx !== false && $pIdx >= 1) {
+                // Hole bis "v1"
+                $sub = array_slice($parts, 0, $pIdx+1);
+                $apiRoot = '/' . implode('/', $sub);
+            } else {
+                // Standard-Fallback
+                $apiRoot = '/api/vehicle/v1';
+            }
+        } else {
+            $apiRoot = '/api/vehicle/v1';
+        }
+
+        $listURL = $base . $found;
+        $statusURLPattern    = $base . $apiRoot . '/{vin}/status';
+        $telemetryURLPattern = $base . $apiRoot . '/{vin}/telemetry';
+
+        // Ergebnisse speichern
+        $auto = [
+            'ok'      => true,
+            'base'    => $base,
+            'list'    => $listURL,
+            'status'  => $statusURLPattern,
+            'tele'    => $telemetryURLPattern,
+            'tested'  => $tested,
+        ];
+
+        $this->SetBuffer('mym_autodetect', json_encode($auto, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+
+        $this->uiLog("AutoDetect: Gefunden → ".$listURL);
+        IPS_LogMessage("PSAVehicle", "AutoDetect: OK → ".$listURL);
+
+        return $auto;
+    }    
 }
