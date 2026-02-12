@@ -376,24 +376,29 @@ class PSAVehicle extends IPSModule
                     "onClick" => 'PSAVehicle_Debug_ListVehiclesV4_ShowVins($id);'
                 ],  
                 [
-                "type"    => "Button",
-                "caption" => "parameters.json lesen & MyM-Endpunkte ableiten",
-                "onClick" => 'PSAVehicle_ReadParametersFromApkAndResolveEndpoints($id);'
+                    "type"    => "Button",
+                    "caption" => "parameters.json lesen & MyM-Endpunkte ableiten",
+                    "onClick" => 'PSAVehicle_ReadParametersFromApkAndResolveEndpoints($id);'
                 ],
                 [
-                "type"    => "Button",
-                "caption" => "VIN‑Liste (MyM) abrufen",
-                "onClick" => 'PSAVehicle_MyM_ListVehicles_FromBuffer($id);'
+                    "type"    => "Button",
+                    "caption" => "VIN‑Liste (MyM) abrufen",
+                    "onClick" => 'PSAVehicle_MyM_ListVehicles_FromBuffer($id);'
                 ],
                 [
-                "type"    => "Button",
-                "caption" => "Fahrzeugdaten (MyM) lesen",
-                "onClick" => 'PSAVehicle_MyM_UpdateVehicleData_FromBuffer($id);'
+                    "type"    => "Button",
+                    "caption" => "Fahrzeugdaten (MyM) lesen",
+                    "onClick" => 'PSAVehicle_MyM_UpdateVehicleData_FromBuffer($id);'
                 ],                
                 [
                     "type" => "Button",
                     "caption" => "TLS-Handschlag testen (optional)",
                     "onClick" => 'PSAVehicle_TestTlsHandshake($id);'
+                ],
+                [
+                    "type"    => "Button",
+                    "caption" => "Debug TlsCaCheck (MyM)",
+                    "onClick" => 'PSAVehicle_Debug_TlsCaCheck_MyM();'
                 ]
             ]
         ];
@@ -3450,5 +3455,91 @@ class PSAVehicle extends IPSModule
         }
         $json = $this->removeChunkEncoding($body);
         return ['http'=>$http,'ok'=>($http>=200 && $http<300),'body'=>$json];
-    }                 
+    }         
+    public function Debug_TlsCaCheck_MyM(): void
+    {
+        $host = "https://ac-mym.servicesgp.mpsa.com/api/v1/user/vehicles";
+
+        $propCA  = trim($this->ReadPropertyString("CAPath"));
+        $caToUse = $propCA !== '' ? $propCA : '/etc/ssl/certs/ca-certificates.crt';
+
+        IPS_LogMessage("PSAVehicle", "TLS-Diag: Property CAPath = ".($propCA !== '' ? $propCA : '(leer)'));
+        IPS_LogMessage("PSAVehicle", "TLS-Diag: Will use CAINFO = ".$caToUse);
+        IPS_LogMessage("PSAVehicle", "TLS-Diag: file_exists=". (file_exists($caToUse) ? 'yes' : 'no')
+            .", readable=". (is_readable($caToUse) ? 'yes' : 'no')
+            .", size=". (@filesize($caToUse) ?: 0));
+
+        // cURL/SSL Infos
+        $ver = curl_version();
+        IPS_LogMessage("PSAVehicle", "TLS-Diag: cURL version=".($ver['version'] ?? '?')
+            ." ssl=".($ver['ssl_version'] ?? '?')
+            ." libz=".($ver['libz_version'] ?? '?'));
+
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+
+        // A) Test ohne mTLS (nur Server-Kette validieren)
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $host,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER         => false,
+            CURLOPT_TIMEOUT        => 20,
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER     => [
+                "Accept: application/json",
+                // absichtlich ohne Authorization, wir wollen nur TLS testen
+            ],
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_CAINFO         => $caToUse,
+        ]);
+        if (defined('CURLINFO_CERTINFO')) { curl_setopt($ch, CURLOPT_CERTINFO, true); }
+        $body = curl_exec($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        if (defined('CURLINFO_CERTINFO')) {
+            $ci = curl_getinfo($ch, CURLINFO_CERTINFO);
+            IPS_LogMessage("PSAVehicle", "TLS-Diag (no mTLS) CertInfo: ".substr(print_r($ci, true), 0, 4000));
+        }
+        curl_close($ch);
+        IPS_LogMessage("PSAVehicle", "TLS-Diag (no mTLS): HTTP={$http} err=".($err ?: 'OK'));
+
+        // B) Test mit mTLS + Header (realer Call, ohne Token kein 200 erwartet – es geht nur um TLS)
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $host,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER         => false,
+            CURLOPT_TIMEOUT        => 20,
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER     => [
+                "Accept: application/json",
+                // Token optional, TLS-Test geht auch ohne:
+                // ($token ? "Authorization: Bearer ".$token : "")
+            ],
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+            CURLOPT_CAINFO         => $caToUse,
+        ]);
+        if (defined('CURLINFO_CERTINFO')) { curl_setopt($ch, CURLOPT_CERTINFO, true); }
+
+        // mTLS-Config (kann CAINFO überschreiben, deshalb CAINFO nachher noch einmal setzen)
+        try {
+            $this->configureCurlMtls($ch);
+        } catch (\Throwable $e) {
+            IPS_LogMessage("PSAVehicle", "TLS-Diag mTLS config failed: ".$e->getMessage());
+        }
+        curl_setopt($ch, CURLOPT_CAINFO, $caToUse); // sicherheitshalber erneut setzen
+
+        $body2 = curl_exec($ch);
+        $http2 = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err2  = curl_error($ch);
+        if (defined('CURLINFO_CERTINFO')) {
+            $ci2 = curl_getinfo($ch, CURLINFO_CERTINFO);
+            IPS_LogMessage("PSAVehicle", "TLS-Diag (with mTLS) CertInfo: ".substr(print_r($ci2, true), 0, 4000));
+        }
+        curl_close($ch);
+        IPS_LogMessage("PSAVehicle", "TLS-Diag (with mTLS): HTTP={$http2} err=".($err2 ?: 'OK'));
+    }            
 }
