@@ -150,7 +150,7 @@ class PSAVehicle extends IPSModule
                 // LCV Basic Auth
                 [
                     "type" => "ExpansionPanel",
-                    "caption" => "Authentifizierung (Client)",
+                    "caption" => "LCV Basic Authentifizierung",
                     "items" => [
                         [
                         "type"    => "ValidationTextBox",
