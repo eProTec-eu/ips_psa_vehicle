@@ -4508,7 +4508,7 @@ class PSAVehicle extends IPSModule
         $this->uiLog("MobileServices: Daten aktualisiert.");
         return true;
     }
-    private function mymPost(string $method, array $params)
+    /*private function mymPost(string $method, array $params)
     {
         $token = trim($this->ReadPropertyString("AccessToken"));
         $realm = trim($this->ReadPropertyString("Realm"));
@@ -4547,7 +4547,144 @@ class PSAVehicle extends IPSModule
         }
 
         return json_decode($res, true);
-    }    
+    } */
+    /**
+     * MyM-Gateway POST-Caller für RPC-Methoden wie "getVehicleStatus", "getVehicleTelemetry", "getVehicles".
+     * - System-CA bleibt aktiv (CAINFO → Systembundle, CAPATH → /etc/ssl/certs)
+     * - Für MyM-Hosts (*.servicesgp.mpsa.com / id-dcr.citroen.com) wird, falls vorhanden,
+     *   zusätzlich die lokale Kette mym-ca/mym-chain.pem als CAINFO verwendet (host-spezifisch).
+     * - mTLS wird über configureCurlMtls() gesetzt (Client-Cert/Key).
+     *
+     * @param string $method  RPC-Methodenname, z. B. "getVehicleStatus"
+     * @param array  $params  Parameter-Array, z. B. ["vin" => "VF7..."]
+     * @param string|null $gatewayUrl  Optional: Gateway überschreiben (Default: https://ac-mym.servicesgp.mpsa.com/mym/v1/gateway)
+     * @param int    $timeoutSec        cURL-Timeout in Sekunden (Default: 30)
+     * @return array { ok:bool, http:int, body:string, json:mixed|null }
+     */
+    public function mymPost(string $method, array $params = [], ?string $gatewayUrl = null, int $timeoutSec = 30): array
+    {
+        // --- 0) Basics prüfen ---
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        if ($token === "" || $realm === "") {
+            $msg = "MyM: AccessToken oder Realm fehlt.";
+            $this->uiLog($msg);
+            return ['ok'=>false,'http'=>0,'body'=>$msg,'json'=>null];
+        }
+
+        // Default-Gateway
+        $url = $gatewayUrl ?: "https://ac-mym.servicesgp.mpsa.com/mym/v1/gateway";
+        $host = parse_url($url, PHP_URL_HOST) ?: '';
+
+        // JSON-Body für das RPC
+        $payload = [
+            'method' => $method,
+            'params' => $params
+        ];
+        $bodyJson = json_encode($payload, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);
+
+        // --- 1) cURL vorbereiten ---
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $bodyJson,
+            CURLOPT_HTTPHEADER     => [
+                "Content-Type: application/json",
+                "Accept: application/json",
+                "Authorization: Bearer {$token}",
+                "x-introspect-realm: {$realm}"
+            ],
+            CURLOPT_RETURNTRANSFER => false,     // wir trennen Header/Body manuell
+            CURLOPT_HEADER         => true,      // Header in den Stream nehmen
+            CURLOPT_TIMEOUT        => max(5, $timeoutSec),
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2
+        ]);
+
+        // --- 2) mTLS (Client-Zert/Key) anwenden ---
+        try {
+            $this->configureCurlMtls($ch);
+        } catch (\Throwable $e) {
+            curl_close($ch);
+            $err = "MyM: mTLS-Config fehlgeschlagen: ".$e->getMessage();
+            $this->uiLog($err);
+            return ['ok'=>false,'http'=>0,'body'=>$err,'json'=>null];
+        }
+
+        // --- 3) Truststore: System-CA + (optional) MyM-Chain gezielt für MyM-Hosts ---
+        // System-Store (CAINFO) defaulten, CAPATH auf /etc/ssl/certs
+        $sysCA = '/etc/ssl/certs/ca-certificates.crt';
+        if (is_readable($sysCA)) {
+            curl_setopt($ch, CURLOPT_CAINFO, $sysCA);
+        }
+        if (is_dir('/etc/ssl/certs')) {
+            @curl_setopt($ch, CURLOPT_CAPATH, '/etc/ssl/certs');
+        }
+
+        // Zusätzliche Host-spezifische Chain-Datei nur für MyM-Gateways verwenden
+        $cacheDir = rtrim($this->ReadPropertyString("CertCacheDir"), '/');
+        $mymChain = $cacheDir !== '' ? ($cacheDir . '/mym-ca/mym-chain.pem') : '';
+        $hasMymChain = $mymChain !== '' && is_file($mymChain) && is_readable($mymChain);
+
+        // Host-Muster: *.servicesgp.mpsa.com oder id-dcr.citroen.com (bei Bedarf erweitern)
+        $isMymHost = (bool)preg_match('~(^|\.)servicesgp\.mpsa\.com$~i', $host)
+                || (bool)preg_match('~(^|\.)id-dcr\.citroen\.com$~i', $host);
+
+        if ($hasMymChain && $isMymHost) {
+            // Für MyM-Hosts gezielt die zusätzliche Kette als CAINFO verwenden
+            curl_setopt($ch, CURLOPT_CAINFO, $mymChain);
+        }
+
+        // --- 4) Header/Body trennen (stabil auch bei chunked) ---
+        $headerRaw = '';
+        $bodyRaw   = '';
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$headerRaw, &$bodyRaw) {
+            if (strpos($headerRaw, "\r\n\r\n") === false) {
+                $headerRaw .= $data;
+            } else {
+                $bodyRaw   .= $data;
+            }
+            return strlen($data);
+        });
+
+        // --- 5) ausführen ---
+        curl_exec($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        $eno  = curl_errno($ch);
+        curl_close($ch);
+
+        // --- 6) Body dekodieren (chunked entfernen) ---
+        $body = $this->removeChunkEncoding($bodyRaw);
+
+        // Debug/Diagnose (optional kürzen)
+        IPS_LogMessage("PSAVehicle", "MyM POST {$method} → HTTP {$http} / cURL: ".($err!=='' ? "{$err} (errno {$eno})" : "OK"));
+        if ($http !== 200 && $body !== '') {
+            IPS_LogMessage("PSAVehicle", "MyM Body: ".substr($body, 0, 1000));
+        }
+
+        // --- 7) Rückgabe auswerten ---
+        $ok = ($http >= 200 && $http < 300);
+        $json = null;
+        if ($body !== '') {
+            $dec = json_decode($body, true);
+            if (is_array($dec)) {
+                $json = $dec;
+            }
+        }
+
+        // 0 = TLS/Netzfehler → Hinweis auf Chain-/Trust-Problem
+        if ($http === 0 && $err !== '') {
+            $hint = $isMymHost
+                ? "Hinweis: Prüfe mym-chain.pem unter {$mymChain} (BuildMymChain ausführen) und Leserechte."
+                : "Hinweis: System-CA prüfen (ca-certificates).";
+            $this->uiLog("MyM TLS-Fehler: {$err}. {$hint}");
+        }
+
+        return ['ok'=>$ok, 'http'=>$http, 'body'=>$body, 'json'=>$json];
+    }      
     public function MyM_GetVehicleList()
     {
         $r = $this->mymPost("getVehicles", ["country" => "DE"]);
@@ -4568,31 +4705,43 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", print_r($r, true));
     }
     /**
-     * Baut automatisch mym-chain.pem per OpenSSL s_client.
-     * Speichert die Datei in CertCacheDir/mym-chain.pem
-     * und setzt CAPath im Modul darauf.
+     * Neue Version: Baut mym-chain.pem ohne CAPath zu überschreiben.
+     *
+     * - speichert Zertifikate in CertCacheDir/mym-ca/
+     * - legt dort mym-chain.pem ab
+     * - CAPath wird NICHT geändert (System-CA bleibt aktiv)
+     * - wird später in httpGetJsonMTLS() via CAPATH eingebunden
      */
     public function BuildMymChain()
     {
         $cacheDir = rtrim($this->ReadPropertyString("CertCacheDir"), '/');
         if ($cacheDir === '' || !$this->isAbsolutePath($cacheDir)) {
-            $this->uiLog("BuildMymChain: Fehler – CertCacheDir fehlt.");
+            $this->uiLog("BuildMymChain: Fehler – CertCacheDir fehlt oder ungültig.");
             return false;
         }
 
-        $pemPath = $cacheDir . "/mym-chain.pem";
+        // eigener Unterordner für CAPATH
+        $mymCaDir = $cacheDir . "/mym-ca";
+        if (!is_dir($mymCaDir)) {
+            if (!mkdir($mymCaDir, 0775, true)) {
+                $this->uiLog("BuildMymChain: Fehler – Konnte Verzeichnis nicht erstellen: ".$mymCaDir);
+                return false;
+            }
+        }
+
+        $pemPath = $mymCaDir . "/mym-chain.pem";
         $host = "ac-mym.servicesgp.mpsa.com:443";
 
-        // Schritt 1: Zertifikate mit OpenSSL abrufen
+        // 1) Zertifikate via openssl abrufen
         $cmd = "openssl s_client -showcerts -connect {$host} </dev/null 2>/dev/null";
         $output = shell_exec($cmd);
 
-        if ($output === null || trim($output) === "") {
-            $this->uiLog("BuildMymChain: Fehler – OpenSSL gab nichts zurück.");
+        if ($output === null || trim($output) === '') {
+            $this->uiLog("BuildMymChain: OpenSSL lieferte keine Ausgabe.");
             return false;
         }
 
-        // Schritt 2: Zertifikate extrahieren
+        // 2) Cert-Blöcke extrahieren
         preg_match_all(
             '/-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----/s',
             $output,
@@ -4604,22 +4753,19 @@ class PSAVehicle extends IPSModule
             return false;
         }
 
-        // Schritt 3: Datei speichern
-        $pem = implode("\n", array_map('trim', $matches[0])) . "\n";
+        // 3) die Datei schreiben
+        $pemData = implode("\n", array_map('trim', $matches[0])) . "\n";
 
-        if (@file_put_contents($pemPath, $pem) === false) {
-            $this->uiLog("BuildMymChain: Konnte Datei nicht speichern.");
+        if (@file_put_contents($pemPath, $pemData) === false) {
+            $this->uiLog("BuildMymChain: Konnte Datei nicht schreiben: ".$pemPath);
             return false;
         }
 
         @chmod($pemPath, 0644);
 
-        // Schritt 4: Modul-Property CAPath setzen
-        IPS_SetProperty($this->InstanceID, "CAPath", $pemPath);
-        IPS_ApplyChanges($this->InstanceID);
-
-        $this->uiLog("BuildMymChain: Erfolgreich – CAPath ist jetzt ".$pemPath);
+        $this->uiLog("BuildMymChain: Erfolgreich – Chain gespeichert in ".$pemPath.
+                    ". System-CA bleibt unverändert.");
 
         return true;
-    }
+    }    
 }
