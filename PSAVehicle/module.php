@@ -477,7 +477,12 @@ class PSAVehicle extends IPSModule
                     "type"    => "Button",
                     "caption" => "MyM – GetTelemetry",
                     "onClick" => 'PSAVehicle_MyM_GetTelemetry2($id);'
-                ],                                                                                      
+                ],   
+                [
+                    "type"    => "Button",
+                    "caption" => "MyM – Discover VehicleRoutes",
+                    "onClick" => 'PSAVehicle_MyM_DiscoverVehicleRoutes($id);'
+                ],                                                                                                      
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
@@ -4835,5 +4840,82 @@ class PSAVehicle extends IPSModule
         IPS_LogMessage("PSAVehicle", "MyM GetTelemetry JSON: " . substr($res['body'], 0, 3000));
         return $res;        
     }
+    public function MyM_DiscoverVehicleRoutes()
+    {
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        $vin   = strtoupper(trim($this->ReadPropertyString("VIN")));
 
+        if ($token === "" || $realm === "" || $vin === "") {
+            $this->uiLog("MyM Discovery: Token/Realm/VIN fehlt.");
+            return false;
+        }
+
+        $host = "https://ac-mym.servicesgp.mpsa.com";
+
+        //
+        // Alle realistischen MyM-Endpunkt-Präfixe
+        //
+        $prefixes = [
+            "/mym/v1",
+            "/mym/v2",
+            "/mym/v3",
+            "/mym/k0/v1",
+            "/mym/k0/v2",
+            "/mym/kx/v1",
+            "/mym/kx/v2",
+            "/mym/lcv/v1",
+            "/mym/lcv/v2"
+        ];
+
+        $found = [];
+        $tested = [];
+
+        foreach ($prefixes as $p) {
+
+            // Liste
+            $listUrl = "{$host}{$p}/user/vehicles";
+
+            // Status
+            $statusUrl = "{$host}{$p}/vehicle/{$vin}/status";
+
+            // Telemetrie
+            $teleUrl = "{$host}{$p}/vehicle/{$vin}/telemetry";
+
+            $set = [
+                "list"   => $listUrl,
+                "status" => $statusUrl,
+                "tele"   => $teleUrl
+            ];
+
+            foreach ($set as $type => $url) {
+
+                $r = $this->httpGetJsonMTLS($url, $token, $realm);
+
+                $tested[] = [
+                    'type' => $type,
+                    'url'  => $url,
+                    'http' => $r['http']
+                ];
+
+                IPS_LogMessage("PSAVehicle", "DISCOVER {$type}: {$url} → HTTP {$r['http']}  BODY: " . substr((string)$r['body'], 0, 200));
+
+                // Treffer, wenn Route existiert → 200/401/403
+                if (in_array($r['http'], [200, 401, 403], true)) {
+                    $this->uiLog("MyM Discovery Treffer: {$type} → {$url}");
+                    $found[$type] = $url;
+                }
+            }
+
+            // Wenn wir Status & Tele haben → fertig
+            if (isset($found['status']) && isset($found['tele'])) {
+                $this->uiLog("MyM Discovery abgeschlossen.");
+                $this->SetBuffer('mym_endpoints', json_encode($found, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+                return $found;
+            }
+        }
+
+        $this->uiLog("MyM Discovery: KEIN Treffer.");
+        return false;
+    }
 }
