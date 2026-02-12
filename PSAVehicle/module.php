@@ -4272,7 +4272,7 @@ class PSAVehicle extends IPSModule
         $this->uiLog($msg);
         return ['ok'=>false,'error'=>$msg,'tested'=>$tested];
     }
-    public function AutoDetect_MobileServices(): array
+    /*public function AutoDetect_MobileServices(): array
     {
         $token = trim($this->ReadPropertyString("AccessToken"));
         $realm = trim($this->ReadPropertyString("Realm"));
@@ -4326,7 +4326,92 @@ class PSAVehicle extends IPSModule
 
         $this->uiLog("MobileServices AutoDetect → KEIN Treffer.");
         return ['ok'=>false, 'tested'=>$tested];
-    }
+    }*/
+    public function AutoDetect_MobileServices(): array
+    {
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        if ($token==="" || $realm==="") {
+            $this->uiLog("MobileServices AutoDetect: Token/Realm fehlt.");
+            return ['ok'=>false];
+        }
+
+        // Basis-URL aus parameters.json
+        $base = trim($this->ReadPropertyString("BaseMobileUrl"));
+        if ($base === "") $base = "https://id-dcr.citroen.com/mobile-services/";
+        $base = rtrim($base, "/");
+
+        // KANDIDATEN – inklusive aller flobz-kompatiblen Pfade
+        $candidates = [
+
+            // Offiziell laut APK
+            "/v1/user/vehicles",
+            "/v1/vehicles",
+            "/v1/user/vehicle",
+            "/v1/vehicle",
+
+            // MyCitroenApp Namespace
+            "/MyCitroenApp/v1/user/vehicles",
+            "/MyCitroenApp/v1/vehicles",
+            "/MyCitroenApp/v1/vehicle",
+            "/MyCitroenApp/v1/vehicle/{vin}/status",
+            "/MyCitroenApp/v1/vehicle/{vin}/telemetry",
+
+            // Alternativ
+            "/api/v1/user/vehicles",
+            "/api/v1/vehicles",
+            "/services/v1/user/vehicles",
+            "/services/v1/vehicles",
+            "/vehicle/v1/vehicles",
+            "/vehicle/v1/user/vehicles",
+
+            // Minimal
+            "/user/vehicles",
+            "/vehicles",
+        ];
+
+        $tested = [];
+
+        foreach ($candidates as $c) {
+
+            // VIN im Pfad ersetzen, falls {vin} existiert
+            $url = $base . str_replace("{vin}", rawurlencode($this->ReadPropertyString("VIN")), $c);
+
+            $res = $this->httpGetJsonMTLS($url, $token, $realm);
+
+            $tested[] = ['url'=>$url, 'http'=>$res['http'], 'ok'=>$res['ok']];
+            IPS_LogMessage("PSAVehicle", "MobileServices AutoDetect → $url (HTTP ".$res['http'].")");
+
+            // Trefferkriterien: Route existiert, auch wenn Auth fehlt
+            if (in_array($res['http'], [200,401,403], true)) {
+
+                // ROOT bestimmen (z.B. /v1 oder /MyCitroenApp/v1)
+                $parts = explode("/", trim($c, "/"));
+                if (count($parts) >= 2) {
+                    $root = "/" . $parts[0] . "/" . $parts[1]; // z.B. /v1 | /MyCitroenApp/v1
+                } else {
+                    $root = "/v1";
+                }
+
+                $auto = [
+                    'ok'     => true,
+                    'type'   => 'mobile',
+                    'base'   => $base,
+                    'list'   => $url,
+                    'status' => $base . $root . "/vehicle/{vin}/status",
+                    'tele'   => $base . $root . "/vehicle/{vin}/telemetry",
+                    'tested' => $tested
+                ];
+
+                $this->SetBuffer('backend_auto', json_encode($auto, JSON_UNESCAPED_SLASHES));
+                $this->uiLog("MobileServices AutoDetect → erfolgreich: ".$url);
+                return $auto;
+            }
+        }
+
+        $this->uiLog("MobileServices AutoDetect → KEIN Treffer.");
+        return ['ok'=>false, 'tested'=>$tested];
+    }    
     public function Mobile_ListVehicles(): bool
     {
         $det = json_decode($this->GetBuffer('backend_auto'), true);
