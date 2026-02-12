@@ -73,6 +73,12 @@ class PSAVehicle extends IPSModule
         
         // Mobile Services
         $this->RegisterPropertyString("BaseMobileUrl", "https://id-dcr.citroen.com/mobile-services/");
+
+        // LCV Basic-Zugangsdaten
+        $this->RegisterPropertyString("LCVHost", "https://api-basic.groupe-psa.com");
+        $this->RegisterPropertyString("LCVBasicUser", "");
+        $this->RegisterPropertyString("LCVBasicPass", "");
+        $this->RegisterPropertyBoolean("LCVUseBasicOnly", true);
     }
 
     public function ApplyChanges()
@@ -140,6 +146,35 @@ class PSAVehicle extends IPSModule
                         ]
                     ]
                 ],
+
+                // LCV Basic Auth
+                [
+                    "type" => "ExpansionPanel",
+                    "caption" => "Authentifizierung (Client)",
+                    "items" => [
+                        [
+                        "type"    => "ValidationTextBox",
+                        "name"    => "LCVHost",
+                        "caption" => "LCV Host (Basic)",
+                        "width"   => "600px"
+                        ],
+                        [
+                        "type"    => "ValidationTextBox",
+                        "name"    => "LCVBasicUser",
+                        "caption" => "LCV Basic Benutzername"
+                        ],
+                        [
+                        "type"    => "PasswordTextBox",
+                        "name"    => "LCVBasicPass",
+                        "caption" => "LCV Basic Passwort"
+                        ],
+                        [
+                        "type"    => "CheckBox",
+                        "name"    => "LCVUseBasicOnly",
+                        "caption" => "LCV: Nur BasicAuth (ohne Bearer/x-introspect-realm) verwenden"
+                        ]
+                    ]
+                ],                
 
                 // mTLS / Zertifikate
                 [
@@ -497,7 +532,17 @@ class PSAVehicle extends IPSModule
                     "type"    => "Button",
                     "caption" => "LCV – GetTelemetry",
                     "onClick" => 'PSAVehicle_LCV_GetTelemetry($id);'
-                ],                                                                                                                                  
+                ],  
+                [
+                "type"    => "Button",
+                "caption" => "LCV – Status (Basic)",
+                "onClick" => "PSAVehicle_LCV_GetStatusBasic($id);"
+                ],
+                [
+                "type"    => "Button",
+                "caption" => "LCV – Telemetrie (Basic)",
+                "onClick" => "PSAVehicle_LCV_GetTelemetryBasic($id);"
+                ]
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
@@ -5082,5 +5127,168 @@ class PSAVehicle extends IPSModule
     {
         $vin = strtoupper(trim($this->ReadPropertyString("VIN")));
         return $this->lcvGet("/connectedservices-lcv/v1/vehicles/{$vin}/status");
-    }     
+    }   
+    /**
+     * Spezieller LCV-GET-Aufruf für BasicAuth-gesicherte Endpunkte
+     * (z. B. https://api-basic.groupe-psa.com/connectedservices-lcv/v1/...).
+     *
+     * - Nutzt wahlweise NUR BasicAuth (LCVUseBasicOnly=true) oder Basic+Bearer (false).
+     * - mTLS bleibt aktiv (schadet nicht, einige Gateways verlangen Client-Zert).
+     * - System-CA bleibt Basis (CAINFO/CAPATH).
+     * - Gibt Header (z. B. WWW-Authenticate) mit zurück.
+     */
+    private function lcvGetBasic(string $url): array
+    {
+        $host  = trim($this->ReadPropertyString("LCVHost")) ?: "https://api-basic.groupe-psa.com";
+        // falls eine relative URL hereinkommt, anhängen:
+        if (stripos($url, 'http') !== 0) {
+            $url = rtrim($host, '/') . '/' . ltrim($url, '/');
+        }
+
+        $token = trim($this->ReadPropertyString("AccessToken"));  // optional, wenn LCVUseBasicOnly=false
+        $realm = trim($this->ReadPropertyString("Realm"));        // optional, wenn LCVUseBasicOnly=false
+        $user  = trim($this->ReadPropertyString("LCVBasicUser"));
+        $pass  = trim($this->ReadPropertyString("LCVBasicPass"));
+        $basicOnly = (bool)$this->ReadPropertyBoolean("LCVUseBasicOnly");
+
+        $ch = curl_init();
+
+        // Header zusammenbauen
+        $hdrs = ["Accept: application/json"];
+        if ($user !== "" && $pass !== "") {
+            $basic = base64_encode($user . ':' . $pass);
+            $hdrs[] = "Authorization: Basic " . $basic;
+        }
+
+        // Optional: Zusätzlich Bearer mitgeben, falls basicOnly=false (manche Produkte gestatten beides)
+        if (!$basicOnly && $token !== "") {
+            $hdrs[] = "Authorization: Bearer {$token}";
+            if ($realm !== "") $hdrs[] = "x-introspect-realm: {$realm}";
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_HEADER         => true,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER     => $hdrs,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2
+        ]);
+
+        // mTLS (Client-Zert/Key) – falls konfiguriert
+        try {
+            $this->configureCurlMtls($ch);
+        } catch (\Throwable $e) {
+            curl_close($ch);
+            return ['http'=>0,'ok'=>false,'body'=>"mTLS config failed: ".$e->getMessage(), 'headers'=>[]];
+        }
+
+        // System-Trust
+        $sysCA = '/etc/ssl/certs/ca-certificates.crt';
+        if (is_readable($sysCA)) curl_setopt($ch, CURLOPT_CAINFO, $sysCA);
+        if (is_dir('/etc/ssl/certs')) @curl_setopt($ch, CURLOPT_CAPATH, '/etc/ssl/certs');
+
+        // Header/Body trennen
+        $raw = '';
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$raw){
+            $raw .= $data; return strlen($data);
+        });
+
+        curl_exec($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        curl_close($ch);
+
+        // Split Header/Body (letzte Sektion nehmen)
+        $sections = preg_split("/\r\n\r\n/", $raw);
+        $hdrRaw = '';
+        $bodyRaw = '';
+        if (count($sections) >= 2) {
+            $hdrRaw  = $sections[count($sections)-2];
+            $bodyRaw = $sections[count($sections)-1];
+        } else {
+            $hdrRaw  = $raw;
+            $bodyRaw = '';
+        }
+
+        // Header in Array
+        $headers = [];
+        foreach (explode("\r\n", $hdrRaw) as $line) {
+            if (stripos($line, 'HTTP/') === 0) continue;
+            $p = strpos($line, ':');
+            if ($p !== false) {
+                $k = strtolower(trim(substr($line, 0, $p)));
+                $v = trim(substr($line, $p+1));
+                $headers[$k][] = $v;
+            }
+        }
+
+        $body = $this->removeChunkEncoding($bodyRaw);
+        IPS_LogMessage("PSAVehicle", "LCV GET(Basic) {$url} → HTTP {$http}; WWW-Auth=".(@$headers['www-authenticate'][0] ?? '-'));
+
+        $ok = ($http >= 200 && $http < 300);
+        return ['http'=>$http,'ok'=>$ok,'body'=>$body,'headers'=>$headers];
+    } 
+    public function LCV_GetStatusBasic(): bool
+    {
+        $vin = strtoupper(trim($this->ReadPropertyString("VIN")));
+        if ($vin === "") { $this->uiLog("LCV Status: VIN fehlt."); return false; }
+
+        $url = "/connectedservices-lcv/v1/vehicles/{$vin}/status";
+        $res = $this->lcvGetBasic($url);
+
+        IPS_LogMessage("PSAVehicle", "LCV Status Basic → HTTP ".$res['http']." BODY ".substr((string)$res['body'],0,1000));
+
+        if (!$res['ok']) {
+            // 401 → Credentials prüfen
+            if ($res['http'] === 401) {
+                $this->uiLog("LCV Status: 401 (BasicAuth fehlgeschlagen) – Benutzer/Passwort prüfen.");
+            } elseif ($res['http'] === 404) {
+                $this->uiLog("LCV Status: 404 (Route/Host prüfen, ggf. LCVHost=api-basic.groupe-psa.com).");
+            } else {
+                $this->uiLog("LCV Status: fehlgeschlagen (HTTP ".$res['http'].")");
+            }
+            return false;
+        }
+
+        // JSON parsen und (später) mappen
+        $json = json_decode((string)$res['body'], true);
+        if (!is_array($json)) { $this->uiLog("LCV Status: ungültiges JSON."); return false; }
+
+        // TODO: Werte mappen (Battery/Range/Odometer/Position) – sobald du die Antwort schickst.
+        $this->uiLog("LCV Status: OK.");
+        return true;
+    }
+
+    public function LCV_GetTelemetryBasic(): bool
+    {
+        $vin = strtoupper(trim($this->ReadPropertyString("VIN")));
+        if ($vin === "") { $this->uiLog("LCV Telemetry: VIN fehlt."); return false; }
+
+        $url = "/connectedservices-lcv/v1/vehicles/{$vin}/telemetry";
+        $res = $this->lcvGetBasic($url);
+
+        IPS_LogMessage("PSAVehicle", "LCV Telemetry Basic → HTTP ".$res['http']." BODY ".substr((string)$res['body'],0,1000));
+
+        if (!$res['ok']) {
+            if ($res['http'] === 401) {
+                $this->uiLog("LCV Telemetry: 401 (BasicAuth fehlgeschlagen) – Benutzer/Passwort prüfen.");
+            } elseif ($res['http'] === 404) {
+                $this->uiLog("LCV Telemetry: 404 (Route/Host prüfen, ggf. LCVHost=api-basic.groupe-psa.com).");
+            } else {
+                $this->uiLog("LCV Telemetry: fehlgeschlagen (HTTP ".$res['http'].")");
+            }
+            return false;
+        }
+
+        $json = json_decode((string)$res['body'], true);
+        if (!is_array($json)) { $this->uiLog("LCV Telemetry: ungültiges JSON."); return false; }
+
+        // TODO: Werte mappen – sobald du die erste Payload postest.
+        $this->uiLog("LCV Telemetry: OK.");
+        return true;
+    }
+
 }
