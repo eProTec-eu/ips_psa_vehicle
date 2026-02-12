@@ -487,7 +487,17 @@ class PSAVehicle extends IPSModule
                     "type"    => "Button",
                     "caption" => "LCV – Discover AuthMode",
                     "onClick" => 'PSAVehicle_LCV_DiscoverAuthMode($id);'
-                ],                                                                                                                   
+                ],  
+                [
+                    "type"    => "Button",
+                    "caption" => "LCV – GetStatus",
+                    "onClick" => 'PSAVehicle_LCV_GetStatus($id);'
+                ],      
+                [
+                    "type"    => "Button",
+                    "caption" => "LCV – GetTelemetry",
+                    "onClick" => 'PSAVehicle_LCV_GetTelemetry($id);'
+                ],                                                                                                                                  
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
@@ -5041,5 +5051,36 @@ class PSAVehicle extends IPSModule
         // kein 200 – trotzdem nützlich: 401/403 geben Hinweise
         $this->uiLog("LCV Discover: kein 200 – siehe Logs für WWW-Authenticate/Scopes");
         return ['ok'=>false,'tested'=>$tested];
-    }    
+    }   
+    private function lcvGet(string $path): array
+    {
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        $vin   = strtoupper(trim($this->ReadPropertyString("VIN")));
+        $clientID = trim($this->ReadPropertyString("ClientID"));
+
+        $cfgRaw = $this->GetBuffer('lcv_auth_mode');
+        $cfg = $cfgRaw ? json_decode($cfgRaw, true) : null;
+
+        $host = $cfg['host'] ?? "https://api-basic.groupe-psa.com";
+        $hdrs = $cfg['hdrs'] ?? [];
+        $url  = rtrim($host,'/').$path;
+
+        if (!empty($cfg['query'])) {
+            $url .= (strpos($url,'?')===false ? '?' : '&')."client_id=".rawurlencode($clientID);
+        }
+        return $this->httpGetJsonMTLS($url, $token, $realm, $hdrs);
+    }
+
+    public function LCV_GetTelemetry(): array
+    {
+        $vin = strtoupper(trim($this->ReadPropertyString("VIN")));
+        return $this->lcvGet("/connectedservices-lcv/v1/vehicles/{$vin}/telemetry");
+    }
+
+    public function LCV_GetStatus(): array
+    {
+        $vin = strtoupper(trim($this->ReadPropertyString("VIN")));
+        return $this->lcvGet("/connectedservices-lcv/v1/vehicles/{$vin}/status");
+    }     
 }
