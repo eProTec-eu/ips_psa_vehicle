@@ -3,8 +3,8 @@
   "name": "PSA Vehicle Library",
   "author": "Matthias Fenske",
   "url": "https://github.com/eProTec-eu/ips_psa_vehicle.git",
-  "version": "2.0",
-  "build": 5,
+  "version": "2.1",
+  "build": 6,
   "date": 1738800000,
   "compatibility": {
     "version": "7.0"

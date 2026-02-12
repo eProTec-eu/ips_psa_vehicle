@@ -3396,14 +3396,27 @@ class PSAVehicle extends IPSModule
                 "x-introspect-realm: {$realm}",
                 "Accept: application/json"
             ],
+            // ✅ Server-CA prüfen:
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
         ]);
-        try { $this->configureCurlMtls($ch); } catch (\Throwable $e) {
+
+        // ✅ CA-Bundle bevorzugt aus Modul-Property, sonst System-Default:
+        $propCA = trim($this->ReadPropertyString("CAPath"));
+        $caToUse = $propCA !== '' ? $propCA : '/etc/ssl/certs/ca-certificates.crt';
+        curl_setopt($ch, CURLOPT_CAINFO, $caToUse);
+        // Optional (je nach System):
+        // curl_setopt($ch, CURLOPT_CAPATH, '/etc/ssl/certs');
+
+        try {
+            $this->configureCurlMtls($ch); // Client-Zert/Key + weitere TLS-Optionen
+        } catch (\Throwable $e) {
             curl_close($ch);
             return ['http'=>0,'ok'=>false,'body'=>"mTLS config failed: ".$e->getMessage()];
         }
 
-        $hdr = ''; $body = '';
-        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch,$data) use (&$hdr,&$body) {
+        $hdr=''; $body='';
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch,$data) use (&$hdr,&$body){
             if (strpos($hdr, "\r\n\r\n") === false) { $hdr .= $data; } else { $body .= $data; }
             return strlen($data);
         });
@@ -3415,8 +3428,7 @@ class PSAVehicle extends IPSModule
         if ($http === 0 && $err !== '') {
             return ['http'=>$http,'ok'=>false,'body'=>$err];
         }
-
         $json = $this->removeChunkEncoding($body);
         return ['http'=>$http,'ok'=>($http>=200 && $http<300),'body'=>$json];
-    }                    
+    }                   
 }
