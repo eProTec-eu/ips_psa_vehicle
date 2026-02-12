@@ -414,7 +414,22 @@ class PSAVehicle extends IPSModule
                     "type"    => "Button",
                     "caption" => "Fahrzeugdaten (Auto) lesen",
                     "onClick" => 'PSAVehicle_Vehicle_Update_Auto($id);'
-                ],                                             
+                ], 
+                [
+                    "type"    => "Button",
+                    "caption" => "Mobile‑Services AutoDetect",
+                    "onClick" => 'PSAVehicle_AutoDetect_MobileServices($id);'
+                ],
+                [
+                    "type"    => "Button",
+                    "caption" => "Mobile‑Services VIN‑Liste",
+                    "onClick" => 'PSAVehicle_Mobile_ListVehicles($id);'
+                ],
+                [
+                    "type"    => "Button",
+                    "caption" => "Mobile‑Services Fahrzeugdaten",
+                    "onClick" => 'PSAVehicle_Mobile_UpdateVehicleData($id);'
+                ],                                                            
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
@@ -4249,5 +4264,130 @@ class PSAVehicle extends IPSModule
         $this->uiLog($msg);
         return ['ok'=>false,'error'=>$msg,'tested'=>$tested];
     }
+    public function AutoDetect_MobileServices(): array
+    {
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+        if ($token==="" || $realm==="") {
+            $this->uiLog("MobileServices: Token/Realm fehlt.");
+            return ['ok'=>false];
+        }
 
+        // Basis-URL aus parameters.json
+        $base = trim($this->ReadPropertyString("BaseMobileUrl"));
+        if ($base === "") $base = "https://id-dcr.citroen.com/mobile-services/";
+        $base = rtrim($base, "/");
+
+        // Kandidaten für die Fahrzeugliste
+        $candidates = [
+            "/v1/user/vehicles",
+            "/services/v1/user/vehicles",
+            "/vehicle/v1/user/vehicles",
+            "/user/vehicles"
+        ];
+
+        $tested = [];
+        foreach ($candidates as $p) {
+            $url = $base . $p;
+
+            $res = $this->httpGetJsonMTLS($url, $token, $realm);
+            $tested[] = ['url'=>$url, 'http'=>$res['http'], 'ok'=>$res['ok']];
+
+            if (in_array($res['http'], [200, 401, 403], true)) {
+                $root = dirname($p);   // z.B. /v1/user → /v1
+                if ($root === "/" || $root === ".") $root = "/v1";
+
+                $auto = [
+                    'ok'     => true,
+                    'type'   => 'mobile',
+                    'base'   => $base,
+                    'list'   => $url,
+
+                    'status' => $base . $root . "/vehicles/{vin}/status",
+                    'tele'   => $base . $root . "/vehicles/{vin}/telemetry",
+
+                    'tested' => $tested
+                ];
+
+                $this->SetBuffer('backend_auto', json_encode($auto, JSON_UNESCAPED_SLASHES));
+                $this->uiLog("MobileServices AutoDetect → OK: ".$url);
+
+                return $auto;
+            }
+        }
+
+        $this->uiLog("MobileServices AutoDetect → KEIN Treffer.");
+        return ['ok'=>false, 'tested'=>$tested];
+    }
+    public function Mobile_ListVehicles(): bool
+    {
+        $det = json_decode($this->GetBuffer('backend_auto'), true);
+        if (!is_array($det) || ($det['type'] ?? '') !== 'mobile') {
+            $this->uiLog("MobileServices: AutoDetect nötig.");
+            $det = $this->AutoDetect_MobileServices();
+        }
+
+        if (empty($det['ok'])) return false;
+
+        $url = $det['list'];
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+
+        $res = $this->httpGetJsonMTLS($url, $token, $realm);
+
+        if (!$res['ok'] && !in_array($res['http'], [401,403], true)) {
+            $this->uiLog("MobileServices VIN-Liste fehlgeschlagen.");
+            return false;
+        }
+
+        $json = json_decode($res['body'], true);
+        if (!is_array($json)) return false;
+
+        $vins = [];
+        if (isset($json['vehicles'])) {
+            foreach ($json['vehicles'] as $v) {
+                if (!empty($v['vin'])) $vins[] = strtoupper($v['vin']);
+            }
+        }
+
+        $msg = "Mobile VINs:\n- " . implode("\n- ", $vins);
+        SetValueString($this->ensurePsaCodeVar(), $msg);
+        $this->SetBuffer('mobile_known_vins', json_encode($vins));
+
+        return !empty($vins);
+    }
+    public function Mobile_UpdateVehicleData(): bool
+    {
+        $det = json_decode($this->GetBuffer('backend_auto'), true);
+        if (!is_array($det) || ($det['type'] ?? '') !== 'mobile') {
+            $this->uiLog("MobileServices: AutoDetect nötig.");
+            $det = $this->AutoDetect_MobileServices();
+        }
+        if (empty($det['ok'])) return false;
+
+        $vin   = strtoupper(trim($this->ReadPropertyString("VIN")));
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+
+        $statusUrl = str_replace("{vin}", rawurlencode($vin), $det['status']);
+        $teleUrl   = str_replace("{vin}", rawurlencode($vin), $det['tele']);
+
+        $rT = $this->httpGetJsonMTLS($teleUrl, $token, $realm);
+        $rS = $this->httpGetJsonMTLS($statusUrl, $token, $realm);
+
+        $payload = null;
+        if ($rT['ok']) $payload = json_decode($rT['body'], true);
+        elseif ($rS['ok']) $payload = json_decode($rS['body'], true);
+        if (!is_array($payload)) return false;
+
+        // Mapping (vereinfachtes Beispiel – ich passe es an, sobald du mir eine echte JSON gibst)
+        $battery = $payload['batteryLevel'] ?? null;
+        $range   = $payload['range']['value'] ?? null;
+
+        if ($battery !== null) SetValue($this->GetIDForIdent("BatteryLevel"), (float)$battery);
+        if ($range !== null)   SetValue($this->GetIDForIdent("Range"), (float)$range);
+
+        $this->uiLog("MobileServices: Daten aktualisiert.");
+        return true;
+    }
 }
