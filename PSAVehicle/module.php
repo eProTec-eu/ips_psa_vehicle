@@ -437,6 +437,26 @@ class PSAVehicle extends IPSModule
                     "type"    => "Button",
                     "caption" => "Mobile‑Services Fahrzeugdaten",
                     "onClick" => 'PSAVehicle_Mobile_UpdateVehicleData($id);'
+                ], 
+                [
+                    "type"    => "Button",
+                    "caption" => "MyM – Fahrzeugliste abrufen",
+                    "onClick" => "PSAVehicle_MyM_GetVehicleList($id);"
+                ],
+                [
+                    "type"    => "Button",
+                    "caption" => "MyM – Status abrufen",
+                    "onClick" => "PSAVehicle_MyM_GetStatus($id);"
+                ],
+                [
+                    "type"    => "Button",
+                    "caption" => "MyM – Telemetrie abrufen",
+                    "onClick" => "PSAVehicle_MyM_GetTelemetry($id);"
+                ],
+                [
+                    "type"    => "Button",
+                    "caption" => "MyM – AutoDetect (optional)",
+                    "onClick" => "PSAVehicle_AutoDetect_MobileServices($id);"
                 ],                                                            
                 [
                     "type"    => "Button",
@@ -4483,4 +4503,64 @@ class PSAVehicle extends IPSModule
         $this->uiLog("MobileServices: Daten aktualisiert.");
         return true;
     }
+    private function mymPost(string $method, array $params)
+    {
+        $token = trim($this->ReadPropertyString("AccessToken"));
+        $realm = trim($this->ReadPropertyString("Realm"));
+
+        $url = "https://ac-mym.servicesgp.mpsa.com/mym/v1/gateway";
+
+        $body = json_encode([
+            "method" => $method,
+            "params" => $params
+        ], JSON_UNESCAPED_SLASHES);
+
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $url,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                "Content-Type: application/json",
+                "Authorization: Bearer ".$token,
+                "x-introspect-realm: ".$realm
+            ],
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+
+        $res = curl_exec($ch);
+        $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+
+        if ($http !== 200) {
+            IPS_LogMessage("PSAVehicle", "MyM HTTP $http: $err");
+            IPS_LogMessage("PSAVehicle", "Body: ".$res);
+            return false;
+        }
+
+        return json_decode($res, true);
+    }    
+    public function MyM_GetVehicleList()
+    {
+        $r = $this->mymPost("getVehicles", ["country" => "DE"]);
+        IPS_LogMessage("PSAVehicle", print_r($r, true));
+    }    
+    public function MyM_GetTelemetry()
+    {
+        $vin = $this->ReadPropertyString("VIN");
+
+        $r = $this->mymPost("getVehicleTelemetry", ["vin" => $vin]);
+        IPS_LogMessage("PSAVehicle", print_r($r, true));
+    }    
+    public function MyM_GetStatus()
+    {
+        $vin = $this->ReadPropertyString("VIN");
+
+        $r = $this->mymPost("getVehicleStatus", ["vin" => $vin]);
+        IPS_LogMessage("PSAVehicle", print_r($r, true));
+    }
+
 }
