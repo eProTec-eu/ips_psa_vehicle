@@ -3396,23 +3396,33 @@ class PSAVehicle extends IPSModule
                 "x-introspect-realm: {$realm}",
                 "Accept: application/json"
             ],
-            // ✅ Server-CA prüfen:
-            CURLOPT_SSL_VERIFYPEER => true,
-            CURLOPT_SSL_VERIFYHOST => 2,
+            // (SSL-Optionen setzen wir gleich nach configureCurlMtls)
         ]);
 
-        // ✅ CA-Bundle bevorzugt aus Modul-Property, sonst System-Default:
-        $propCA = trim($this->ReadPropertyString("CAPath"));
-        $caToUse = $propCA !== '' ? $propCA : '/etc/ssl/certs/ca-certificates.crt';
-        curl_setopt($ch, CURLOPT_CAINFO, $caToUse);
-        // Optional (je nach System):
-        // curl_setopt($ch, CURLOPT_CAPATH, '/etc/ssl/certs');
-
+        // mTLS (Client-Zert/Key) + evtl. CA aus Properties
         try {
-            $this->configureCurlMtls($ch); // Client-Zert/Key + weitere TLS-Optionen
+            $this->configureCurlMtls($ch); // könnte CAINFO setzen, wenn Property 'CAPath' belegt ist
         } catch (\Throwable $e) {
             curl_close($ch);
             return ['http'=>0,'ok'=>false,'body'=>"mTLS config failed: ".$e->getMessage()];
+        }
+
+        // ✅ JETZT final die Server-Verification *erzwingen* & CA-Bundle bestimmen
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+
+        $propCA  = trim($this->ReadPropertyString("CAPath"));
+        $caToUse = $propCA !== '' ? $propCA : '/etc/ssl/certs/ca-certificates.crt';
+        curl_setopt($ch, CURLOPT_CAINFO, $caToUse);
+
+        // Optional: CAPATH nutzen (unter Linux meist /etc/ssl/certs)
+        if (is_dir('/etc/ssl/certs')) {
+            @curl_setopt($ch, CURLOPT_CAPATH, '/etc/ssl/certs');
+        }
+
+        // Zertifikats-Infos für Diagnose aktivieren (nur temporär; geringe Performance)
+        if (defined('CURLINFO_CERTINFO')) {
+            curl_setopt($ch, CURLOPT_CERTINFO, true);
         }
 
         $hdr=''; $body='';
@@ -3420,9 +3430,19 @@ class PSAVehicle extends IPSModule
             if (strpos($hdr, "\r\n\r\n") === false) { $hdr .= $data; } else { $body .= $data; }
             return strlen($data);
         });
+
         curl_exec($ch);
         $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err  = curl_error($ch);
+
+        // Zertifikatsinfos loggen (falls verfügbar)
+        if (defined('CURLINFO_CERTINFO')) {
+            $certInfo = curl_getinfo($ch, CURLINFO_CERTINFO);
+            if (is_array($certInfo)) {
+                IPS_LogMessage("PSAVehicle", "MyM TLS CertInfo: ".substr(print_r($certInfo, true), 0, 4000));
+            }
+        }
+
         curl_close($ch);
 
         if ($http === 0 && $err !== '') {
@@ -3430,5 +3450,5 @@ class PSAVehicle extends IPSModule
         }
         $json = $this->removeChunkEncoding($body);
         return ['http'=>$http,'ok'=>($http>=200 && $http<300),'body'=>$json];
-    }                   
+    }                 
 }
