@@ -3381,5 +3381,42 @@ class PSAVehicle extends IPSModule
 
         $this->uiLog($updated ? "MyM: Fahrzeugdaten aktualisiert." : "MyM: Keine mappbaren Datenfelder gefunden.");
         return $updated;
-    }                 
+    } 
+    private function httpGetJsonMyM(string $url, string $token, string $realm): array
+    {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_HEADER         => true,
+            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_HTTP_VERSION   => CURL_HTTP_VERSION_1_1,
+            CURLOPT_HTTPHEADER     => [
+                "Authorization: Bearer {$token}",
+                "x-introspect-realm: {$realm}",
+                "Accept: application/json"
+            ],
+        ]);
+        try { $this->configureCurlMtls($ch); } catch (\Throwable $e) {
+            curl_close($ch);
+            return ['http'=>0,'ok'=>false,'body'=>"mTLS config failed: ".$e->getMessage()];
+        }
+
+        $hdr = ''; $body = '';
+        curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch,$data) use (&$hdr,&$body) {
+            if (strpos($hdr, "\r\n\r\n") === false) { $hdr .= $data; } else { $body .= $data; }
+            return strlen($data);
+        });
+        curl_exec($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        curl_close($ch);
+
+        if ($http === 0 && $err !== '') {
+            return ['http'=>$http,'ok'=>false,'body'=>$err];
+        }
+
+        $json = $this->removeChunkEncoding($body);
+        return ['http'=>$http,'ok'=>($http>=200 && $http<300),'body'=>$json];
+    }                    
 }
