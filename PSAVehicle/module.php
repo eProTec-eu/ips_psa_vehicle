@@ -3893,6 +3893,20 @@ class PSAVehicle extends IPSModule
         curl_setopt($ch, CURLOPT_CAINFO, $caToUse);
         if (is_dir('/etc/ssl/certs')) { @curl_setopt($ch, CURLOPT_CAPATH, '/etc/ssl/certs'); }
 
+        // Zusätzliche Host-spezifische Chain-Datei nur für MyM-Gateways verwenden
+        $cacheDir = rtrim($this->ReadPropertyString("CertCacheDir"), '/');
+        $mymChain = $cacheDir !== '' ? ($cacheDir . '/mym-ca/mym-chain.pem') : '';
+        $hasMymChain = $mymChain !== '' && is_file($mymChain) && is_readable($mymChain);
+
+        // Host-Muster: *.servicesgp.mpsa.com oder id-dcr.citroen.com (bei Bedarf erweitern)
+        $isMymHost = (bool)preg_match('~(^|\.)servicesgp\.mpsa\.com$~i', $host)
+                || (bool)preg_match('~(^|\.)id-dcr\.citroen\.com$~i', $host);
+
+        if ($hasMymChain && $isMymHost) {
+            // Für MyM-Hosts gezielt die zusätzliche Kette als CAINFO verwenden
+            curl_setopt($ch, CURLOPT_CAINFO, $mymChain);
+        }
+
         // Header/Body trennen
         $hdr=''; $body='';
         curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch,$data) use (&$hdr,&$body){
