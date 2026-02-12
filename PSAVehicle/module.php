@@ -4078,5 +4078,176 @@ class PSAVehicle extends IPSModule
 
         IPS_LogMessage("PSAVehicle",$msg);
         return !empty($vins);
-    }                
+    }  
+    /* AUTO-DETECT über alle bekannten Stellantis-Backends:
+    *  - PSA ConnectedCar v4 (ältere PKW)
+    *  - MyM / MyBrand Services (neuere PKW)
+    *  - LCV Telematics (Nutzfahrzeuge: ë‑Jumpy, e‑Expert, Vivaro‑e …)
+    *
+    * Ergebnis wird im Buffer 'backend_auto' gespeichert:
+    *  {
+    *    "type": "lcv" | "mym" | "psa_v4",
+    *    "host": "https://…",
+    *    "list": "https://…/…/vehicles",
+    *    "status": "https://…/{vin}/status",        // sofern sinnvoll
+    *    "tele": "https://…/{vin}/telemetry",       // sofern sinnvoll
+    *    "detail": "https://…/vehicle/{vin}?…",     // für PSA v4
+    *    "tested": [ {"url": "...", "http": 404, "ok": false}, ... ]
+    *  }
+    */
+    public function AutoDetect_AllBackends(): array
+    {
+        if (!$this->validateMtlsPaths()) {
+            $msg = "AutoDetect: mTLS-Paths ungültig.";
+            $this->uiLog($msg);
+            return ['ok'=>false, 'error'=>$msg];
+        }
+
+        $token    = trim($this->ReadPropertyString("AccessToken"));
+        $realm    = trim($this->ReadPropertyString("Realm"));
+        $vin      = strtoupper(trim($this->ReadPropertyString("VIN")));
+        $clientID = trim($this->ReadPropertyString("ClientID"));
+        if ($token==="" || $realm==="" || $vin==="" || $clientID==="") {
+            $msg = "AutoDetect: Token/Realm/VIN/ClientID fehlt.";
+            $this->uiLog($msg);
+            return ['ok'=>false, 'error'=>$msg];
+        }
+
+        // --- 0) Gemeinsamer GET-Helper (nutzt deinen bestehenden MyM-HTTP-Helper) ---
+        $do = function(string $url) use ($token, $realm) {
+            return $this->httpGetJsonMyM($url, $token, $realm);
+        };
+
+        $tested = [];
+
+        // --- 1) PSA v4: Einzel-Fahrzeug (kein List-Endpunkt) ---
+        //    Route existiert, wenn HTTP ∈ {200,401,403,423}. 404=kein Routing.
+        $psaHost = "https://api.groupe-psa.com";
+        $psaUrl  = $psaHost . "/connectedcar/v4/vehicle/" . rawurlencode($vin) . "?client_id=" . rawurlencode($clientID);
+        $r = $do($psaUrl);
+        $tested[] = ['url'=>$psaUrl,'http'=>$r['http'],'ok'=>$r['ok']];
+        IPS_LogMessage("PSAVehicle","AutoDetect PSA v4 → ".$psaUrl." (HTTP ".$r['http'].")");
+
+        if (in_array($r['http'], [200,401,403,423], true)) {
+            $found = [
+                'ok'     => true,
+                'type'   => 'psa_v4',
+                'host'   => $psaHost,
+                'detail' => $psaUrl,  // Schablone nicht nötig, direkt mit client_id
+                'tested' => $tested
+            ];
+            $this->SetBuffer('backend_auto', json_encode($found, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+            $this->uiLog("AutoDetect: PSA v4 erkannt.");
+            return $found;
+        }
+
+        // --- 2) MyM / MyBrand: Basis aus parameters.json nutzen (falls vorhanden) ---
+        $mymBase = null;
+        $mymBuf  = $this->GetBuffer('mym_endpoints');
+        if ($mymBuf !== '') {
+            $tmp = json_decode($mymBuf, true);
+            if (is_array($tmp) && !empty($tmp['base'])) $mymBase = rtrim($tmp['base'], '/');
+        }
+        if ($mymBase === null) {
+            // Fallback: typischer Host
+            $mymBase = "https://ac-mym.servicesgp.mpsa.com";
+        }
+
+        $mymCandidates = [
+            "/api/vehicle/v1/vehicles",
+            "/api/vehicle-list/v1/vehicles",
+            "/connected/v1/user/vehicles",
+            "/api/v1/vehicle/vehicles",
+            "/api/v1/user/vehicles",
+            "/vehicle/v1/vehicles",
+            "/user/vehicles",
+        ];
+        $mymFound = null;
+        foreach ($mymCandidates as $p) {
+            $url = $mymBase . (str_starts_with($p, '/') ? $p : "/$p");
+            $r = $do($url);
+            $tested[] = ['url'=>$url,'http'=>$r['http'],'ok'=>$r['ok']];
+            IPS_LogMessage("PSAVehicle","AutoDetect MyM → ".$url." (HTTP ".$r['http'].")");
+            if (in_array($r['http'], [200,401,403], true)) { $mymFound = $p; break; }
+        }
+        if ($mymFound !== null) {
+            // Basis bis /v1 ableiten:
+            $parts = explode('/', trim($mymFound,'/'));
+            $root  = '/api/vehicle/v1';
+            $idx   = array_search('v1',$parts,true);
+            if ($idx!==false && $idx>=1) $root = '/'.implode('/', array_slice($parts,0,$idx+1));
+            $found = [
+                'ok'     => true,
+                'type'   => 'mym',
+                'host'   => $mymBase,
+                'list'   => $mymBase . $mymFound,
+                'status' => $mymBase . $root . '/{vin}/status',
+                'tele'   => $mymBase . $root . '/{vin}/telemetry',
+                'tested' => $tested
+            ];
+            $this->SetBuffer('backend_auto', json_encode($found, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+            $this->uiLog("AutoDetect: MyM erkannt.");
+            return $found;
+        }
+
+        // --- 3) LCV Telematics (Jumpy/Expert/Vivaro) ---
+        $lcvHosts = [
+            "https://api.groupe-psa.com",
+            "https://api-basic.groupe-psa.com",   // gelegentlich Routing via 'basic'
+        ];
+        $lcvListCandidates = [
+            "/connectedservices-lcv/v1/users/me/vehicles",
+            "/connectedservices-lcv/v1/vehicles",
+            "/telematics/v1/user/vehicles",
+            "/telematics/v1/vehicles",
+        ];
+        $lcvFound = null;
+        $lcvHost  = null;
+
+        foreach ($lcvHosts as $h) {
+            foreach ($lcvListCandidates as $p) {
+                $url = rtrim($h,'/') . $p;
+                $r = $do($url);
+                $tested[] = ['url'=>$url,'http'=>$r['http'],'ok'=>$r['ok']];
+                IPS_LogMessage("PSAVehicle","AutoDetect LCV → ".$url." (HTTP ".$r['http'].")");
+                // Route existiert, wenn 200/401/403
+                if (in_array($r['http'], [200,401,403], true)) {
+                    $lcvFound = $p; $lcvHost = $h; break 2;
+                }
+            }
+        }
+
+        if ($lcvFound !== null) {
+            // Status/Telemetry Schablonen aus dem gefundenen Pfad ableiten
+            $status = null; $tele = null;
+            if (str_starts_with($lcvFound, "/connectedservices-lcv/")) {
+                $root   = "/connectedservices-lcv/v1/vehicles";
+                $status = $lcvHost . $root . "/{vin}/status";
+                $tele   = $lcvHost . $root . "/{vin}/telemetry";
+            } else {
+                // telematics/v1
+                $root   = "/telematics/v1/vehicles";
+                $status = $lcvHost . $root . "/{vin}/status";
+                $tele   = $lcvHost . $root . "/{vin}/telemetry";
+            }
+
+            $found = [
+                'ok'     => true,
+                'type'   => 'lcv',
+                'host'   => $lcvHost,
+                'list'   => $lcvHost . $lcvFound,
+                'status' => $status,
+                'tele'   => $tele,
+                'tested' => $tested
+            ];
+            $this->SetBuffer('backend_auto', json_encode($found, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE));
+            $this->uiLog("AutoDetect: LCV erkannt.");
+            return $found;
+        }
+
+        $msg = "AutoDetect: Keine gültige Backend-Route gefunden.";
+        $this->uiLog($msg);
+        return ['ok'=>false,'error'=>$msg,'tested'=>$tested];
+    }
+
 }
