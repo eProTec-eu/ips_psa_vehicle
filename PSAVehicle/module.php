@@ -398,7 +398,7 @@ class PSAVehicle extends IPSModule
                 [
                     "type" => "Button",
                     "caption" => "Generate MyM Chain Pem",
-                    "onClick" => 'GenerateMymChainPem($id);'
+                    "onClick" => 'PSAVehicle_GenerateMymChainPem($id);'
                 ],                
                 [
                     "type"    => "Button",
