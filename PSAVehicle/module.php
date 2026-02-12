@@ -398,7 +398,7 @@ class PSAVehicle extends IPSModule
                 [
                     "type"    => "Button",
                     "caption" => "Debug TlsCaCheck (MyM)",
-                    "onClick" => 'PSAVehicle_Debug_TlsCaCheck_MyM();'
+                    "onClick" => 'PSAVehicle_Debug_TlsCaCheck_MyM($id);'
                 ]
             ]
         ];
