@@ -471,7 +471,7 @@ class PSAVehicle extends IPSModule
                 [
                     "type"    => "Button",
                     "caption" => "MyM – GetStatus",
-                    "onClick" => 'PSAVehicle_MyM_GetStatus($id);'
+                    "onClick" => 'PSAVehicle_MyM_GetStatus2($id);'
                 ],      
                 [
                     "type"    => "Button",
@@ -4788,7 +4788,7 @@ class PSAVehicle extends IPSModule
         $url = "https://ac-mym.servicesgp.mpsa.com/mym/v1/user/vehicles";
         return $this->httpGetJsonMTLS($url, $this->ReadPropertyString("AccessToken"), $this->ReadPropertyString("Realm"));
     }   
-    public function MyM_GetStatus()
+    public function MyM_GetStatus2()
     {
         $vin = trim($this->ReadPropertyString("VIN"));
         $url = "https://ac-mym.servicesgp.mpsa.com/mym/v1/vehicle/{$vin}/status";
