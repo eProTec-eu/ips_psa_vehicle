@@ -2,7 +2,7 @@
   "id": "{AB12CDEF-3456-7890-ABCD-1234567890FF}",
   "author": "eprotec",
   "version": "1.5.0",
-  "name": "PSA Vehicle Package",
+  "name": "PSAVehiclePackage",
   "url": "https://github.com/eProTec-eu/ips_psa_vehicle.git",
 
   "modules": [
