@@ -29,6 +29,9 @@ class PSAMQTTSocket
 
     public function connect()
     {
+        if (empty($this->certFile) || empty($this->keyFile) || empty($this->caFile)) {
+            throw new Exception("TLS-Fehler: einer der Pfade ist leer. certFile={$this->certFile}, keyFile={$this->keyFile}, caFile={$this->caFile}");
+        }
         $context = stream_context_create([
             'ssl' => [
                 'cafile'            => $this->caFile,

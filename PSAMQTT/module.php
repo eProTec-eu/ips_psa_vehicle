@@ -49,6 +49,11 @@ class PSAMQTT extends IPSModule
             $this->caBundle    = IPS_GetProperty($parentID, "CAPath");
 
             IPS_LogMessage("PSAMQTT", "Parent übernommen: VIN={$this->vin}, CID={$this->customerId}");
+            
+            IPS_LogMessage("PSAMQTT", "CertPath=".$this->clientCert);
+            IPS_LogMessage("PSAMQTT", "KeyPath=".$this->clientKey);
+            IPS_LogMessage("PSAMQTT", "CAPath=".$this->caBundle);
+
         } else {
             IPS_LogMessage("PSAMQTT", "Kein PSAVehicle-Modul gewählt.");
         }
