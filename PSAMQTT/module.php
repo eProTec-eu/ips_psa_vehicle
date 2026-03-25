@@ -97,18 +97,25 @@ class PSAMQTT extends IPSModule
     private function EnsureMQTTIO()
     {
         $guid = "{6F67F96F-40A7-4E1C-AE41-9F4A50123ABC}";
-        $found = IPS_GetInstanceListByModuleID($guid);
 
-        if (count($found) > 0) {
-            $this->WriteAttributeInteger("MQTT_IO", $found[0]);
-            return $found[0];
+        // Prüfen, ob schon einer existiert
+        foreach (IPS_GetInstanceListByModuleID($guid) as $id) {
+            // NUR MQTTClient I/O akzeptieren
+            if (IPS_GetInstance($id)['ModuleInfo']['ModuleName'] === "MQTTClient") {
+                $this->WriteAttributeInteger("MQTT_IO", $id);
+                return $id;
+            }
         }
 
-        $id = IPS_CreateInstance($guid);
-        IPS_SetName($id, "PSA MQTT I/O");
-        IPS_ApplyChanges($id);
-        $this->WriteAttributeInteger("MQTT_IO", $id);
-        return $id;
+        // Falls keiner existiert → neuen erzeugen
+        $io = IPS_CreateInstance($guid);
+        IPS_SetName($io, "PSA MQTT I/O");
+
+        IPS_ApplyChanges($io);
+
+        $this->WriteAttributeInteger("MQTT_IO", $io);
+        return $io;
+
     }
 
 
