@@ -1,13 +1,28 @@
 {
-  "id": "{6F67F96F-40A7-4E1C-AE41-9F4A50123ABC}",
-  "name": "PSAVehicle",
-  "type": 3,
-  "vendor": "eprotec",
-  "aliases": ["PSA Vehicle API"],
-  "url": "https://github.com/eProTec-eu/ips_psa_vehicle.git",
-  "parentRequirements": [],
-  "childRequirements": [],
-  "implemented": [],
+  "id": "{AB12CDEF-3456-7890-ABCD-1234567890FF}",
+  "author": "eprotec",
   "version": "1.5.0",
-  "prefix": "PSAVehicle"
+  "name": "PSA Vehicle Package",
+  "url": "https://github.com/eProTec-eu/ips_psa_vehicle.git",
+
+  "modules": [
+    {
+      "id": "{6F67F96F-40A7-4E1C-AE41-9F4A50123ABC}",
+      "name": "PSAVehicle",
+      "type": 3,
+      "vendor": "eprotec",
+      "aliases": ["PSA Vehicle API"],
+      "prefix": "PSAVehicle",
+      "file": "module.php",
+      "version": "1.5.0"
+    },
+    {
+      "id": "{B9B1D7E8-1B1F-49D4-8D7F-1D9D9A2C7F90}",
+      "name": "PSAMQTT",
+      "type": 3,
+      "prefix": "PSAMQTT",
+      "file": "PSAMQTT.php",
+      "version": "1.0.0"
+    }
+  ]
 }
