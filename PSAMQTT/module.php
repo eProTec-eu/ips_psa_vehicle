@@ -50,14 +50,78 @@ class PSAMQTT extends IPSModule
         $this->RegisterVariableString("RawJSON", "Letzte Telemetrie", "", 1000);
     }
 
-
     public function ApplyChanges()
     {
         parent::ApplyChanges();
+
+        // 1) Parent ermitteln
+        $parentID = IPS_GetInstance($this->InstanceID)['ConnectionID'];
+
+        if ($parentID > 0) {
+
+            // 2) Werte aus dem PSAVehicle Modul holen
+            $vin   = IPS_GetProperty($parentID, "VIN");
+            $cid   = IPS_GetProperty($parentID, "CustomerID"); 
+            $token = IPS_GetProperty($parentID, "AccessToken");
+            $cert  = IPS_GetProperty($parentID, "CertPath");
+            $key   = IPS_GetProperty($parentID, "KeyPath");
+            $ca    = IPS_GetProperty($parentID, "CAPath");
+
+            // 3) Werte übernehmen
+            $this->vin         = $vin;
+            $this->customerId  = $cid;
+            $this->accessToken = $token;
+            $this->clientCert  = $cert;
+            $this->clientKey   = $key;
+            $this->caBundle    = $ca;
+
+            IPS_LogMessage("PSAMQTT", "Parent übernommen → VIN=$vin, CID=$cid");
+        } else {
+            IPS_LogMessage("PSAMQTT", "Kein Parent-Modul verbunden!");
+        }
+
+        // 4) ERST JETZT verbinden!
         $this->ConnectToMQTT();
     }
 
+    public function GetConfigurationForm()
+    {
+        $form = [
+            "elements" => [
+                [
+                    "type" => "SelectInstance",
+                    "name" => "SourceVehicleModule",
+                    "caption" => "Quelle: PSAVehicle Instanz",
+                    "filter" => "module:{6F67F96F-40A7-4E1C-AE41-9F4A50123ABC}"
+                ]
+            ],
 
+            "actions" => [
+                [
+                    "type" => "Button",
+                    "caption" => "MQTT neu verbinden",
+                    "onClick" => 'PSAMQTT_Reconnect($id);'
+                ],
+                [
+                    "type" => "Button",
+                    "caption" => "WakeUp senden",
+                    "onClick" => 'PSAMQTT_WakeUp($id);'
+                ]
+            ],
+
+            "status" => []
+        ];
+
+        return json_encode($form);
+    }
+
+    public function MessageSink($TimeStamp, $SenderID, $Message, $Data)
+    {
+        if ($Message === "PSA_TOKEN_UPDATED") {
+            $this->ApplyChanges(); // reconnect mit neuem Token
+        }
+    }
+    
     private function EnsureMQTTIO()
     {
         $guid = "{6A1D9E86-FC53-4E6C-9D8D-0B3D9F5B8C2E}"; // MQTTClient
