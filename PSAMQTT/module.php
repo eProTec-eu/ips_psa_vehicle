@@ -96,7 +96,7 @@ class PSAMQTT extends IPSModule
 
     private function EnsureMQTTIO()
     {
-        $guid = "{6A1D9E86-FC53-4E6C-9D8D-0B3D9F5B8C2E}";
+        $guid = "{6F67F96F-40A7-4E1C-AE41-9F4A50123ABC}";
         $found = IPS_GetInstanceListByModuleID($guid);
 
         if (count($found) > 0) {
