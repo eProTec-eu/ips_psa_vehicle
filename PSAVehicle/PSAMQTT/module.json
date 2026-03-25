@@ -1,0 +1,13 @@
+{
+  "id": "{9B1D7E8-1B1F-49D4-8D7D-1D9D9A2C7F90}",
+  "name": "PSAMQTT",
+  "type": 3,
+  "vendor": "eprotec",
+  "aliases": ["PSA MQTT"],
+  "url": "https://github.com/eProTec-eu/ips_psa_vehicle.git",
+  "parentRequirements": [],
+  "childRequirements": [],
+  "implemented": [],
+  "version": "1.0.0",
+  "prefix": "PSAMQTT"
+}
