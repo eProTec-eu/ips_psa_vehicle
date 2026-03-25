@@ -153,25 +153,25 @@ class PSAVehicle extends IPSModule
                     "caption" => "LCV Basic Authentifizierung",
                     "items" => [
                         [
-                        "type"    => "ValidationTextBox",
-                        "name"    => "LCVHost",
-                        "caption" => "LCV Host (Basic)",
-                        "width"   => "600px"
+                            "type"    => "ValidationTextBox",
+                            "name"    => "LCVHost",
+                            "caption" => "LCV Host (Basic)",
+                            "width"   => "600px"
                         ],
                         [
-                        "type"    => "ValidationTextBox",
-                        "name"    => "LCVBasicUser",
-                        "caption" => "LCV Basic Benutzername"
+                            "type"    => "ValidationTextBox",
+                            "name"    => "LCVBasicUser",
+                            "caption" => "LCV Basic Benutzername"
                         ],
                         [
-                        "type"    => "PasswordTextBox",
-                        "name"    => "LCVBasicPass",
-                        "caption" => "LCV Basic Passwort"
+                            "type"    => "PasswordTextBox",
+                            "name"    => "LCVBasicPass",
+                            "caption" => "LCV Basic Passwort"
                         ],
                         [
-                        "type"    => "CheckBox",
-                        "name"    => "LCVUseBasicOnly",
-                        "caption" => "LCV: Nur BasicAuth (ohne Bearer/x-introspect-realm) verwenden"
+                            "type"    => "CheckBox",
+                            "name"    => "LCVUseBasicOnly",
+                            "caption" => "LCV: Nur BasicAuth (ohne Bearer/x-introspect-realm) verwenden"
                         ]
                     ]
                 ],                
