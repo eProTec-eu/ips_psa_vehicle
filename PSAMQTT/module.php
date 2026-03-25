@@ -1,98 +1,223 @@
 <?php
-/**
- * PSAMQTT – Direkter Stellantis MQTT-Client für IP‑Symcon
- * Option C – In eigener Datei, unabhängig von PSAVehicle
- *
- * Host:   mwa.mpsa.com
- * Port:   8885
- * Auth:   Username  = "IMA_OAUTH_ACCESS_TOKEN"
- *         Password  = <AccessToken>
- * TLS:    Client‑Zertifikat + Key (aus Flobz-APK)
- *
- * Telemetrie Topics:
- *   psa/RemoteServices/events/MPHRTServices/<VIN>
- * Response Topics:
- *   psa/RemoteServices/to/cid/<CID>/#
- * Commands:
- *   psa/RemoteServices/from/cid/<CID>/...
- */
 
 class PSAMQTT extends IPSModule
 {
+    private $vin;
+    private $customerId;
+    private $accessToken;
+    private $clientCert;
+    private $clientKey;
+    private $caBundle;
+
     public function Create()
     {
         parent::Create();
 
-        // Core fields
-        $this->RegisterPropertyString("VIN", "");
-        $this->RegisterPropertyString("CustomerID", "");
-        $this->RegisterPropertyString("AccessToken", "");
+        // Verbindung zur PSAVehicle-Modulinstanz
+        $this->RegisterPropertyInteger("SourceVehicleModule", 0);
 
-        // Broker
-        $this->RegisterPropertyString("MQTTHost", "mwa.mpsa.com");
-        $this->RegisterPropertyInteger("MQTTPort", 8885);
-
-        // TLS/mTLS
-        $this->RegisterPropertyString("ClientCertPath", "");
-        $this->RegisterPropertyString("ClientKeyPath", "");
-        $this->RegisterPropertyString("CABundlePath", "/etc/ssl/certs/ca-certificates.crt");
-
-        // Debug
-        $this->RegisterPropertyBoolean("DebugJSON", true);
-
-        // Telemetry variables
+        // Telemetrie-Variablen
         $this->RegisterVariableFloat("SOC", "Batterie (%)", "~Intensity.100", 10);
         $this->RegisterVariableInteger("Range", "Reichweite (km)", "", 20);
         $this->RegisterVariableInteger("ChargeRate", "Ladestrom (A)", "", 30);
         $this->RegisterVariableInteger("RemainingTime", "Restzeit (min)", "", 40);
         $this->RegisterVariableInteger("SignalQuality", "Signalqualität", "", 50);
         $this->RegisterVariableInteger("HMIState", "HMI-State", "", 60);
+
         $this->RegisterVariableString("RawJSON", "Letzte Telemetrie", "", 1000);
+
+        // Internal I/O MQTT Client InstanceID
+        $this->RegisterAttributeInteger("MQTT_IO", 0);
     }
+
 
     public function ApplyChanges()
     {
         parent::ApplyChanges();
 
-        // 1) Parent ermitteln
-        $parentID = IPS_GetInstance($this->InstanceID)['ConnectionID'];
-
+        // Parent ermitteln
+        $parentID = $this->ReadPropertyInteger("SourceVehicleModule");
         if ($parentID > 0) {
 
-            // 2) Werte aus dem PSAVehicle Modul holen
-            $vin   = IPS_GetProperty($parentID, "VIN");
-            $cid   = IPS_GetProperty($parentID, "CustomerID"); 
-            $token = IPS_GetProperty($parentID, "AccessToken");
-            $cert  = IPS_GetProperty($parentID, "CertPath");
-            $key   = IPS_GetProperty($parentID, "KeyPath");
-            $ca    = IPS_GetProperty($parentID, "CAPath");
+            $this->vin         = IPS_GetProperty($parentID, "VIN");
+            $this->customerId  = IPS_GetProperty($parentID, "ClientID");
+            $this->accessToken = IPS_GetProperty($parentID, "AccessToken");
+            $this->clientCert  = IPS_GetProperty($parentID, "CertPath");
+            $this->clientKey   = IPS_GetProperty($parentID, "KeyPath");
+            $this->caBundle    = IPS_GetProperty($parentID, "CAPath");
 
-            // 3) Werte übernehmen
-            $this->vin         = $vin;
-            $this->customerId  = $cid;
-            $this->accessToken = $token;
-            $this->clientCert  = $cert;
-            $this->clientKey   = $key;
-            $this->caBundle    = $ca;
-
-            IPS_LogMessage("PSAMQTT", "Parent übernommen → VIN=$vin, CID=$cid");
+            IPS_LogMessage("PSAMQTT", "Daten vom Parent übernommen: VIN={$this->vin}, CID={$this->customerId}");
         } else {
-            IPS_LogMessage("PSAMQTT", "Kein Parent-Modul verbunden!");
+            IPS_LogMessage("PSAMQTT", "Kein Parent (PSAVehicle) gewählt.");
         }
 
-        // 4) ERST JETZT verbinden!
+        // MQTT verbinden
         $this->ConnectToMQTT();
     }
+
+
+    private function ConnectToMQTT()
+    {
+        if (!$this->vin || !$this->customerId || !$this->accessToken) {
+            IPS_LogMessage("PSAMQTT", "Nicht alle Parameter gesetzt – MQTT wird nicht gestartet.");
+            return;
+        }
+
+        $ioID = $this->EnsureMQTTIO();
+        if ($ioID === 0) {
+            IPS_LogMessage("PSAMQTT", "Kann MQTT I/O nicht erzeugen.");
+            return;
+        }
+
+        IPS_SetProperty($ioID, "Host", "mwa.mpsa.com");
+        IPS_SetProperty($ioID, "Port", 8885);
+        IPS_SetProperty($ioID, "UseTLS", true);
+
+        IPS_SetProperty($ioID, "VerifyPeer", true);
+        IPS_SetProperty($ioID, "CAFile", $this->caBundle);
+        IPS_SetProperty($ioID, "CertFile", $this->clientCert);
+        IPS_SetProperty($ioID, "KeyFile",  $this->clientKey);
+
+        // Auth via Stellantis OAuth Token
+        IPS_SetProperty($ioID, "Username", "IMA_OAUTH_ACCESS_TOKEN");
+        IPS_SetProperty($ioID, "Password", $this->accessToken);
+
+        // Subscriptions
+        $subs = [
+            ["Topic" => "psa/RemoteServices/events/MPHRTServices/" . $this->vin, "QoS" => 0],
+            ["Topic" => "psa/RemoteServices/to/cid/" . $this->customerId . "/#", "QoS" => 0]
+        ];
+        IPS_SetProperty($ioID, "Subscriptions", json_encode($subs));
+
+        IPS_ApplyChanges($ioID);
+        IPS_LogMessage("PSAMQTT", "MQTT verbunden mit mwa.mpsa.com:8885");
+    }
+
+
+    private function EnsureMQTTIO()
+    {
+        $guid = "{6A1D9E86-FC53-4E6C-9D8D-0B3D9F5B8C2E}";
+        $found = IPS_GetInstanceListByModuleID($guid);
+
+        if (count($found) > 0) {
+            $this->WriteAttributeInteger("MQTT_IO", $found[0]);
+            return $found[0];
+        }
+
+        $id = IPS_CreateInstance($guid);
+        IPS_SetName($id, "PSA MQTT I/O");
+        IPS_ApplyChanges($id);
+        $this->WriteAttributeInteger("MQTT_IO", $id);
+        return $id;
+    }
+
+
+    public function ReceiveData($JSONString)
+    {
+        $data = json_decode($JSONString, true);
+        if (!isset($data["Topic"]) || !isset($data["Payload"]))
+            return;
+
+        $topic = $data["Topic"];
+        $raw   = $data["Payload"];
+
+        $this->SetValue("RawJSON", substr($raw, 0, 8000));
+
+        if (str_starts_with($topic, "psa/RemoteServices/events/MPHRTServices/"))
+            $this->ParseTelemetry($raw);
+
+        if (str_starts_with($topic, "psa/RemoteServices/to/cid/"))
+            IPS_LogMessage("PSAMQTT", "Response: $topic $raw");
+    }
+
+
+    private function ParseTelemetry(string $json)
+    {
+        $d = json_decode($json, true);
+        if (!$d) return;
+
+        if (isset($d["charging_state"])) {
+            $cs = $d["charging_state"];
+
+            if (isset($cs["soc_batt"]))      $this->SetValue("SOC", floatval($cs["soc_batt"]));
+            if (isset($cs["autonomy_zev"]))  $this->SetValue("Range", intval($cs["autonomy_zev"]));
+            if (isset($cs["rate"]))          $this->SetValue("ChargeRate", intval($cs["rate"]));
+            if (isset($cs["remaining_time"]))$this->SetValue("RemainingTime", intval($cs["remaining_time"]));
+        }
+
+        if (isset($d["signal_quality"])) $this->SetValue("SignalQuality", intval($d["signal_quality"]));
+        if (isset($d["hmi_state"]))      $this->SetValue("HMIState", intval($d["hmi_state"]));
+    }
+
+
+    private function PublishCommand(string $endpoint, array $params)
+    {
+        $topic = "psa/RemoteServices/from/cid/" . $this->customerId . "/" . $endpoint;
+
+        $msg = [
+            "access_token"   => $this->accessToken,
+            "customer_id"    => $this->customerId,
+            "correlation_id" => $this->CorrelationID(),
+            "req_date"       => gmdate("Y-m-d\TH:i:s\Z"),
+            "vin"            => $this->vin,
+            "req_parameters" => $params
+        ];
+
+        $payload = json_encode($msg, JSON_UNESCAPED_SLASHES);
+
+        $io = $this->EnsureMQTTIO();
+        MQTTClient_Publish($io, $topic, $payload, 0, false);
+    }
+
+
+    private function CorrelationID(): string
+    {
+        return str_replace("-", "", IPS_Guid()) . gmdate("YmdHis");
+    }
+
+
+    // ======== USER COMMANDS ========
+
+    public function Reconnect()
+    {
+        $this->ApplyChanges();
+    }
+
+    public function WakeUp()
+    {
+        $this->PublishCommand("VehCharge/state", ["action" => "state"]);
+    }
+
+    public function Preconditioning(bool $on)
+    {
+        $this->PublishCommand("ThermalPrecond", [
+            "asap" => $on ? "activate" : "deactivate"
+        ]);
+    }
+
+    public function LockDoor(bool $lock)
+    {
+        $this->PublishCommand("Doors", [
+            "action" => $lock ? "lock" : "unlock"
+        ]);
+    }
+
 
     public function GetConfigurationForm()
     {
         $form = [
             "elements" => [
+
                 [
                     "type" => "SelectInstance",
                     "name" => "SourceVehicleModule",
                     "caption" => "Quelle: PSAVehicle Instanz",
                     "filter" => "module:{6F67F96F-40A7-4E1C-AE41-9F4A50123ABC}"
+                ],
+
+                [
+                    "type" => "Label",
+                    "caption" => "Das Modul bezieht Token, VIN, CustomerID und Zertifikate automatisch vom PSAVehicle-Modul."
                 ]
             ],
 
@@ -113,153 +238,5 @@ class PSAMQTT extends IPSModule
         ];
 
         return json_encode($form);
-    }
-
-    public function MessageSink($TimeStamp, $SenderID, $Message, $Data)
-    {
-        if ($Message === "PSA_TOKEN_UPDATED") {
-            $this->ApplyChanges(); // reconnect mit neuem Token
-        }
-    }
-    
-    private function EnsureMQTTIO()
-    {
-        $guid = "{6A1D9E86-FC53-4E6C-9D8D-0B3D9F5B8C2E}"; // MQTTClient
-        $list = IPS_GetInstanceListByModuleID($guid);
-        if (count($list)) return $list[0];
-
-        $id = IPS_CreateInstance($guid);
-        IPS_SetName($id, "PSA MQTT I/O");
-        return $id;
-    }
-
-
-    private function ConnectToMQTT()
-    {
-        $vin   = strtoupper($this->ReadPropertyString("VIN"));
-        $cid   = $this->ReadPropertyString("CustomerID");
-        $host  = $this->ReadPropertyString("MQTTHost");
-        $port  = $this->ReadPropertyInteger("MQTTPort");
-        $cert  = $this->ReadPropertyString("ClientCertPath");
-        $key   = $this->ReadPropertyString("ClientKeyPath");
-        $cab   = $this->ReadPropertyString("CABundlePath");
-        $token = $this->ReadPropertyString("AccessToken");
-
-        if (!$vin || !$cid || !$token || !$cert || !$key) {
-            IPS_LogMessage("PSAMQTT", "Config unvollständig: VIN/CID/Token/Cert/Key fehlen");
-            return;
-        }
-
-        $io = $this->EnsureMQTTIO();
-
-        IPS_SetProperty($io, "Host", $host);
-        IPS_SetProperty($io, "Port", $port);
-        IPS_SetProperty($io, "UseTLS", true);
-        IPS_SetProperty($io, "VerifyPeer", true);
-        IPS_SetProperty($io, "CAFile", $cab);
-        IPS_SetProperty($io, "CertFile", $cert);
-        IPS_SetProperty($io, "KeyFile", $key);
-        IPS_SetProperty($io, "Username", "IMA_OAUTH_ACCESS_TOKEN");
-        IPS_SetProperty($io, "Password", $token);
-
-        // Subscriptions
-        IPS_SetProperty($io, "Subscriptions", json_encode([
-            [ "Topic" => "psa/RemoteServices/events/MPHRTServices/$vin", "QoS" => 0 ],
-            [ "Topic" => "psa/RemoteServices/to/cid/$cid/#",             "QoS" => 0 ]
-        ]));
-
-        IPS_ApplyChanges($io);
-        IPS_LogMessage("PSAMQTT", "MQTT verbunden: $host:$port");
-    }
-
-
-    public function ReceiveData($JSONString)
-    {
-        $d = json_decode($JSONString, true);
-        if (!$d || !isset($d["Topic"]) || !isset($d["Payload"])) return;
-
-        $topic = $d["Topic"];
-        $raw   = $d["Payload"];
-
-        if ($this->ReadPropertyBoolean("DebugJSON"))
-            $this->SetValue("RawJSON", substr($raw, 0, 5000));
-
-        if (str_starts_with($topic, "psa/RemoteServices/events/MPHRTServices/"))
-            return $this->ParseTelemetry($raw);
-
-        if (str_starts_with($topic, "psa/RemoteServices/to/cid/"))
-            IPS_LogMessage("PSAMQTT", "Response: $topic → $raw");
-    }
-
-
-    private function ParseTelemetry(string $json)
-    {
-        $j = json_decode($json, true);
-        if (!$j) return;
-
-        if (isset($j["charging_state"])) {
-            $c = $j["charging_state"];
-
-            if (isset($c["soc_batt"]))      $this->SetValue("SOC", floatval($c["soc_batt"]));
-            if (isset($c["autonomy_zev"]))  $this->SetValue("Range", intval($c["autonomy_zev"]));
-            if (isset($c["rate"]))          $this->SetValue("ChargeRate", intval($c["rate"]));
-            if (isset($c["remaining_time"]))$this->SetValue("RemainingTime", intval($c["remaining_time"]));
-        }
-
-        if (isset($j["signal_quality"]))
-            $this->SetValue("SignalQuality", intval($j["signal_quality"]));
-
-        if (isset($j["hmi_state"]))
-            $this->SetValue("HMIState", intval($j["hmi_state"]));
-    }
-
-
-    private function PublishCommand($topic, array $params)
-    {
-        $cid   = $this->ReadPropertyString("CustomerID");
-        $vin   = strtoupper($this->ReadPropertyString("VIN"));
-        $token = $this->ReadPropertyString("AccessToken");
-
-        $payload = json_encode([
-            "access_token"   => $token,
-            "customer_id"    => $cid,
-            "correlation_id" => $this->CorrelationID(),
-            "req_date"       => gmdate("Y-m-d\TH:i:s\Z"),
-            "vin"            => $vin,
-            "req_parameters" => $params
-        ], JSON_UNESCAPED_SLASHES);
-
-        $io = $this->EnsureMQTTIO();
-        MQTTClient_Publish($io, $topic, $payload, 0, false);
-    }
-
-
-    private function CorrelationID(): string
-    {
-        return str_replace("-", "", IPS_Guid()) . gmdate("YmdHis");
-    }
-
-    public function WakeUp()
-    {
-        $cid = $this->ReadPropertyString("CustomerID");
-        $this->PublishCommand("psa/RemoteServices/from/cid/$cid/VehCharge/state", [
-            "action" => "state"
-        ]);
-    }
-
-    public function Preconditioning(bool $on)
-    {
-        $cid = $this->ReadPropertyString("CustomerID");
-        $this->PublishCommand("psa/RemoteServices/from/cid/$cid/ThermalPrecond", [
-            "asap" => $on ? "activate" : "deactivate"
-        ]);
-    }
-
-    public function LockDoor(bool $lock)
-    {
-        $cid = $this->ReadPropertyString("CustomerID");
-        $this->PublishCommand("psa/RemoteServices/from/cid/$cid/Doors", [
-            "action" => $lock ? "lock" : "unlock"
-        ]);
     }
 }
