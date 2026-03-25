@@ -80,7 +80,7 @@ class PSAMQTT extends IPSModule
     private function EnsureMQTTIO()
     {
         // GUID des Client Sockets (IO)
-        $socketGUID = "{3CFF0B74-88F5-4B4D-ADB8-8B1E5BE36F62}";
+        $socketGUID = "{F7A0DD2E-7684-95C0-64C2-D2A9DC47577B}";
 
         // Existiert bereits ein Client Socket?
         $ioList = IPS_GetInstanceListByModuleID($socketGUID);
