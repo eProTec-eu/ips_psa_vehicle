@@ -95,7 +95,7 @@ class PSAMQTT extends IPSModule
 
     private function EnsureMQTTIO()
     {
-        $guid = "{3CFF0B74-88F5-4B4D-ADB8-8B1E5BE36F62}"; // MQTTClient
+        $guid = "{F7A0DD2E-7684-95C0-64C2-D2A9DC47577B}"; // MQTTClient
 
         foreach (IPS_GetInstanceListByModuleID($guid) as $id) {
             $this->WriteAttributeInteger("MQTT_IO", $id);
