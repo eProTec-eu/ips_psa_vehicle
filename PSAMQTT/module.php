@@ -46,7 +46,7 @@ class PSAMQTT extends IPSModule
             $this->clientKey   = IPS_GetProperty($parentID, "KeyPath");
             $this->caBundle    = IPS_GetProperty($parentID, "CAPath");
 
-            IPS_LogMessage("PSAMQTT", "Daten vom Parent übernommen: VIN={$this->vin}, CID={$this->customerId}");
+            IPS_LogMessage("PSAMQTT", "Daten vom Parent ($parentID) übernommen: VIN={$this->vin}, CID={$this->customerId}");
         } else {
             IPS_LogMessage("PSAMQTT", "Kein Parent (PSAVehicle) gewählt.");
         }
@@ -93,31 +93,23 @@ class PSAMQTT extends IPSModule
         IPS_LogMessage("PSAMQTT", "MQTT verbunden mit mwa.mpsa.com:8885");
     }
 
-
     private function EnsureMQTTIO()
     {
-        $guid = "{6F67F96F-40A7-4E1C-AE41-9F4A50123ABC}";
+        $guid = "{6A1D9E86-FC53-4E6C-9D8D-0B3D9F5B8C2E}"; // MQTTClient
 
-        // Prüfen, ob schon einer existiert
         foreach (IPS_GetInstanceListByModuleID($guid) as $id) {
-            // NUR MQTTClient I/O akzeptieren
-            if (IPS_GetInstance($id)['ModuleInfo']['ModuleName'] === "MQTTClient") {
-                $this->WriteAttributeInteger("MQTT_IO", $id);
-                return $id;
-            }
+            $this->WriteAttributeInteger("MQTT_IO", $id);
+            return $id;
         }
 
-        // Falls keiner existiert → neuen erzeugen
+        // Neu erstellen
         $io = IPS_CreateInstance($guid);
         IPS_SetName($io, "PSA MQTT I/O");
-
         IPS_ApplyChanges($io);
 
         $this->WriteAttributeInteger("MQTT_IO", $io);
         return $io;
-
     }
-
 
     public function ReceiveData($JSONString)
     {
