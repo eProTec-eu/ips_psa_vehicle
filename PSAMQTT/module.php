@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . "/PSAMQTTSocket.php";
+
 class PSAMQTT extends IPSModule
 {
     private $vin;
@@ -95,8 +97,6 @@ class PSAMQTT extends IPSModule
         $this->WriteAttributeInteger("MQTT_SPLITTER", $split);
         return $split;
     }
-
-    require_once __DIR__ . "/PSAMQTTSocket.php";
 
     public function ConnectToMQTT()
     {
