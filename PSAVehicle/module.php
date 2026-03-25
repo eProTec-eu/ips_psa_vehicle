@@ -9,8 +9,6 @@
  * Modifikationen © 2026 Matthias Fenske.
  */
 
-require_once __DIR__ . '/PSAMQTT.php';
-
 class PSAVehicle extends IPSModule
 {
     
