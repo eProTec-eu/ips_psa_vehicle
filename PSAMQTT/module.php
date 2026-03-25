@@ -96,27 +96,32 @@ class PSAMQTT extends IPSModule
         return $split;
     }
 
-    private function ConnectToMQTT()
+    require_once __DIR__ . "/PSAMQTTSocket.php";
+
+    public function ConnectToMQTT()
     {
-        if (!$this->vin || !$this->customerId || !$this->accessToken) {
-            IPS_LogMessage("PSAMQTT", "MQTT Verbindung abgebrochen: Parent-Daten fehlen.");
-            return;
-        }
+        $sock = new PSAMQTTSocket(
+            $this->clientCert,
+            $this->clientKey,
+            $this->caBundle
+        );
 
-        $io = $this->EnsureClientSocket();
+        $sock->connect();
 
-        IPS_SetProperty($io, "Host", "mwa.mpsa.com");
-        IPS_SetProperty($io, "Port", 8885);
-        IPS_SetProperty($io, "UseSSL", true);
-        IPS_SetProperty($io, "VerifyPeer", true);
-        IPS_SetProperty($io, "CAFile", $this->caBundle);
-        IPS_SetProperty($io, "CertFile", $this->clientCert);
-        IPS_SetProperty($io, "KeyFile", $this->clientKey);
-        IPS_SetProperty($io, "Open", true);
-        IPS_ApplyChanges($io);
+        // MQTT CONNECT
+        $sock->sendConnect(
+            "symcon-" . $this->vin,
+            "IMA_OAUTH_ACCESS_TOKEN",
+            $this->accessToken
+        );
 
-        $split = $this->EnsureMQTTSplitter($io);
-        IPS_LogMessage("PSAMQTT", "MQTT verbunden über ClientSocket + MQTT Client.");
+        IPS_LogMessage("PSAMQTT","MQTT CONNECT gesendet");
+
+        // Telemetrie topics:
+        $sock->sendSubscribe("psa/RemoteServices/events/MPHRTServices/{$this->vin}");
+        $sock->sendSubscribe("psa/RemoteServices/to/cid/{$this->customerId}/#");
+
+        $this->mqttSocket = $sock;
     }
 
     public function ReceiveData($JSONString)
@@ -185,7 +190,18 @@ class PSAMQTT extends IPSModule
 
     public function WakeUp()
     {
-        $this->PublishCommand("VehCharge/state", ["action" => "state"]);
+        $json = json_encode([
+            "access_token" => $this->accessToken,
+            "customer_id" => $this->customerId,
+            "correlation_id" => uniqid(),
+            "req_date" => gmdate("Y-m-d\TH:i:s\Z"),
+            "vin" => $this->vin,
+            "req_parameters" => ["action" => "state"]
+        ]);
+
+        $topic = "psa/RemoteServices/from/cid/{$this->customerId}/VehCharge/state";
+
+        $this->mqttSocket->sendPublish($topic, $json);
     }
 
     public function GetConfigurationForm()
