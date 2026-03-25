@@ -55,56 +55,45 @@ class PSAMQTT extends IPSModule
         $this->ConnectToMQTT();
     }
 
-
     private function ConnectToMQTT()
     {
-        if (!$this->vin || !$this->customerId || !$this->accessToken) {
-            IPS_LogMessage("PSAMQTT", "Nicht alle Parameter gesetzt – MQTT wird nicht gestartet.");
-            return;
-        }
-
         $ioID = $this->EnsureMQTTIO();
-        if ($ioID === 0) {
-            IPS_LogMessage("PSAMQTT", "Kann MQTT I/O nicht erzeugen.");
-            return;
-        }
 
         IPS_SetProperty($ioID, "Host", "mwa.mpsa.com");
         IPS_SetProperty($ioID, "Port", 8885);
-        IPS_SetProperty($ioID, "UseTLS", true);
+        IPS_SetProperty($ioID, "UseSSL", true);
 
         IPS_SetProperty($ioID, "VerifyPeer", true);
         IPS_SetProperty($ioID, "CAFile", $this->caBundle);
         IPS_SetProperty($ioID, "CertFile", $this->clientCert);
-        IPS_SetProperty($ioID, "KeyFile",  $this->clientKey);
+        IPS_SetProperty($ioID, "KeyFile", $this->clientKey);
 
-        // Auth via Stellantis OAuth Token
         IPS_SetProperty($ioID, "Username", "IMA_OAUTH_ACCESS_TOKEN");
         IPS_SetProperty($ioID, "Password", $this->accessToken);
 
-        // Subscriptions
-        $subs = [
-            ["Topic" => "psa/RemoteServices/events/MPHRTServices/" . $this->vin, "QoS" => 0],
-            ["Topic" => "psa/RemoteServices/to/cid/" . $this->customerId . "/#", "QoS" => 0]
-        ];
-        IPS_SetProperty($ioID, "Subscriptions", json_encode($subs));
-
+        IPS_SetProperty($ioID, "Open", true);
         IPS_ApplyChanges($ioID);
-        IPS_LogMessage("PSAMQTT", "MQTT verbunden mit mwa.mpsa.com:8885");
+
+        IPS_LogMessage("PSAMQTT", "ClientSocket verbunden");
     }
 
     private function EnsureMQTTIO()
     {
-        $guid = "{F7A0DD2E-7684-95C0-64C2-D2A9DC47577B}"; // MQTTClient
+        // GUID des Client Sockets (IO)
+        $socketGUID = "{3CFF0B74-88F5-4B4D-ADB8-8B1E5BE36F62}";
 
-        foreach (IPS_GetInstanceListByModuleID($guid) as $id) {
-            $this->WriteAttributeInteger("MQTT_IO", $id);
-            return $id;
+        // Existiert bereits ein Client Socket?
+        $ioList = IPS_GetInstanceListByModuleID($socketGUID);
+        if (count($ioList) > 0) {
+            $io = $ioList[0];
+            $this->WriteAttributeInteger("MQTT_IO", $io);
+            return $io;
         }
 
-        // Neu erstellen
-        $io = IPS_CreateInstance($guid);
-        IPS_SetName($io, "PSA MQTT I/O");
+        // neuen Client Socket erzeugen
+        $io = IPS_CreateInstance($socketGUID);
+        IPS_SetName($io, "PSA MQTT Socket");
+
         IPS_ApplyChanges($io);
 
         $this->WriteAttributeInteger("MQTT_IO", $io);
