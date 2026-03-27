@@ -6,10 +6,13 @@ class PSAMQTT extends IPSModule
     {
         parent::Create();
 
-        // Verbindung zu PSAVehicle (damit wir VIN, CID, Token lesen können)
+        // Parent ist das MQTT Client Device
+        $this->ConnectParent("{7F7632D9-FA40-4F38-8DEA-C83CD4325A32}");
+
+        // PSAVehicle-Instanz
         $this->RegisterPropertyInteger("VehicleModuleID", 0);
 
-        // Variablen
+        // Telemetrievariablen
         $this->RegisterVariableFloat("SOC", "Batterie (%)", "~Intensity.100", 10);
         $this->RegisterVariableInteger("Range", "Reichweite (km)", "", 20);
         $this->RegisterVariableInteger("ChargeRate", "Ladestrom (A)", "", 30);
@@ -23,50 +26,38 @@ class PSAMQTT extends IPSModule
     public function ApplyChanges()
     {
         parent::ApplyChanges();
-
         $vehicleID = $this->ReadPropertyInteger("VehicleModuleID");
+
         if ($vehicleID <= 0) {
-            IPS_LogMessage("PSAMQTT", "Kein PSAVehicle Modul ausgewählt.");
+            IPS_LogMessage("PSAMQTT", "Keine PSAVehicle-Instanz ausgewählt.");
             return;
         }
 
-        // Daten aus PSAVehicle holen
-        $vin   = IPS_GetProperty($vehicleID, "VIN");
-        $cid   = IPS_GetProperty($vehicleID, "ClientID");     // Stellantis CID (AC-ACNT....)
-        $token = IPS_GetProperty($vehicleID, "AccessToken");
+        // VIN / CID / TOKEN aus PSAVehicle holen
+        $vin   = trim(IPS_GetProperty($vehicleID, "VIN"));
+        $cid   = trim(IPS_GetProperty($vehicleID, "ClientID"));
+        $token = trim(IPS_GetProperty($vehicleID, "AccessToken"));
 
-        // Per MQTT an psa_bridge.py senden
-        $this->PublishConfig($vin, $cid, $token);
-
-        IPS_LogMessage("PSAMQTT", "Config an Bridge gesendet: VIN=$vin, CID=$cid");
-    }
-
-    /**
-     * Sende VIN / CID / TOKEN an Python-Bridge
-     */
-    private function PublishConfig($vin, $cid, $token)
-    {
-        // Es wird die lokale MQTT-Parent-Verbindung genutzt
+        // An Python-Bridge senden
         $this->SendMQTT("symcon/psa/config/vin", $vin);
         $this->SendMQTT("symcon/psa/config/cid", $cid);
         $this->SendMQTT("symcon/psa/config/token", $token);
+
+        IPS_LogMessage("PSAMQTT", "Konfiguration gesendet → VIN=$vin, CID=$cid");
     }
 
-    /**
-     * Hilfsfunktion: MQTT senden über Symcon MQTT Device
-     */
+    /** MQTT Publish */
     private function SendMQTT($topic, $payload)
     {
-        $data = [
+        $json = json_encode([
             "Topic"   => $topic,
             "Payload" => $payload
-        ];
-        $this->SendDataToParent(json_encode($data));
+        ]);
+
+        $this->SendDataToParent($json);
     }
 
-    /**
-     * Stellantis COMMAND: WakeUp
-     */
+    /** WakeUp senden */
     public function WakeUp()
     {
         $vehicleID = $this->ReadPropertyInteger("VehicleModuleID");
@@ -75,45 +66,41 @@ class PSAMQTT extends IPSModule
 
         $topic = "psa/RemoteServices/from/cid/$cid/VehCharge/state";
 
-        $payload = [
-            "access_token"   => "local",   // Die Bridge nutzt ihr eigenes Token
+        $payload = json_encode([
+            "access_token"   => "local",
             "customer_id"    => $cid,
             "correlation_id" => uniqid(),
             "req_date"       => gmdate("Y-m-d\TH:i:s\Z"),
             "vin"            => $vin,
             "req_parameters" => ["action" => "state"]
-        ];
+        ]);
 
-        $this->SendMQTT($topic, json_encode($payload));
-        IPS_LogMessage("PSAMQTT", "WakeUp gesendet");
+        $this->SendMQTT($topic, $payload);
     }
 
-    /**
-     * Telemetrie parsing (von Python-Bridge → Symcon MQTT Client → hier)
-     */
+    /** Telemetrie-Empfang */
     public function ReceiveData($JSONString)
     {
         $data = json_decode($JSONString, true);
 
+        // Muss MQTT Client Device Format haben
         if (!isset($data["Topic"]) || !isset($data["Payload"])) {
+            IPS_LogMessage("PSAMQTT", "ReceiveData: falsches Datenformat");
             return;
         }
 
-        $topic = $data["Topic"];
+        $topic   = $data["Topic"];
         $payload = $data["Payload"];
 
-        // Log Raw JSON
+        // Raw Log
         $this->SetValue("RawJSON", substr($payload, 0, 8000));
 
-        // Telemetrie?
+        // Telemetrie vom Fahrzeug
         if (strpos($topic, "psa/RemoteServices/events/MPHRTServices/") === 0) {
             $this->ParseTelemetry($payload);
         }
     }
 
-    /**
-     * JSON → Variablen
-     */
     private function ParseTelemetry($json)
     {
         $d = json_decode($json, true);
@@ -121,7 +108,6 @@ class PSAMQTT extends IPSModule
 
         if (isset($d["charging_state"])) {
             $cs = $d["charging_state"];
-
             if (isset($cs["soc_batt"]))       $this->SetValue("SOC", floatval($cs["soc_batt"]));
             if (isset($cs["autonomy_zev"]))   $this->SetValue("Range", intval($cs["autonomy_zev"]));
             if (isset($cs["rate"]))           $this->SetValue("ChargeRate", intval($cs["rate"]));
@@ -132,12 +118,9 @@ class PSAMQTT extends IPSModule
         if (isset($d["hmi_state"]))      $this->SetValue("HMIState", intval($d["hmi_state"]));
     }
 
-    /**
-     * Konfigurationsformular
-     */
     public function GetConfigurationForm()
     {
-        $form = [
+        return json_encode([
             "elements" => [
                 [
                     "type"    => "SelectInstance",
@@ -157,8 +140,6 @@ class PSAMQTT extends IPSModule
                     "onClick" => 'PSAMQTT_WakeUp($id);'
                 ]
             ]
-        ];
-
-        return json_encode($form);
+        ]);
     }
 }
