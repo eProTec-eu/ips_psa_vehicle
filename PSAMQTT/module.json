@@ -3,6 +3,9 @@
   "name": "PSAMQTT",
   "type": 3,
   "vendor": "PSA",
+  "aliases": [
+    "PSA MQTT"
+  ],
   "prefix": "PSAMQTT",
   "parentRequirements": [
     "{91D174F2-AE0F-B8D8-5EF4-6232B9083CCF}"
